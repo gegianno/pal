@@ -20,7 +20,7 @@ class CodexConfig:
 
 
 @dataclass
-class WSConfig:
+class WtfaConfig:
     root: Path
     worktree_root: Path
     branch_prefix: str = "feat"
@@ -29,8 +29,17 @@ class WSConfig:
     codex: CodexConfig = field(default_factory=CodexConfig)
 
     @property
-    def ws_local_path(self) -> Path:
+    def local_config_path(self) -> Path:
         return self.root / ".wtfa.toml"
+
+    # Backward-compatible alias (older name used `ws_*`).
+    @property
+    def ws_local_path(self) -> Path:  # pragma: no cover
+        return self.local_config_path
+
+
+# Backward-compatible alias (older class name used `WS*`).
+WSConfig = WtfaConfig
 
 
 def _read_toml(path: Path) -> dict[str, Any]:
@@ -48,20 +57,20 @@ def global_config_path() -> Path:
 def load_config(
     root: Path,
     cli_overrides: Optional[dict[str, Any]] = None,
-) -> WSConfig:
+) -> WtfaConfig:
     """
     Load config with precedence: CLI overrides > local .wtfa.toml > global config.
     """
     cli_overrides = cli_overrides or {}
 
     # Start with defaults
-    cfg = WSConfig(
+    cfg = WtfaConfig(
         root=root,
         worktree_root=Path("_wt"),
     )
 
     # Apply global, then local
-    for p in [global_config_path(), cfg.ws_local_path]:
+    for p in [global_config_path(), cfg.local_config_path]:
         d = _read_toml(p)
         if not d:
             continue
@@ -78,7 +87,7 @@ def load_config(
     return cfg
 
 
-def _apply_dict(cfg: WSConfig, d: dict[str, Any]) -> None:
+def _apply_dict(cfg: WtfaConfig, d: dict[str, Any]) -> None:
     if "root" in d:
         cfg.root = Path(d["root"])
     if "worktree_root" in d:

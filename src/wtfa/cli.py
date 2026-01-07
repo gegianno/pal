@@ -115,7 +115,7 @@ def doctor(
         f"worktree_root: {cfg.worktree_root}\n"
         f"branch_prefix: {cfg.branch_prefix}\n"
         f"global config: {global_config_path()}\n"
-        f"local config: {cfg.ws_local_path}",
+        f"local config: {cfg.local_config_path}",
         title="wtfa",
     ))
 
@@ -409,7 +409,7 @@ def rm(
     console.print("[green]✓[/green] removed")
 
 
-config_app = typer.Typer(help="Manage ws configuration files.")
+config_app = typer.Typer(help="Manage wtfa configuration files.")
 app.add_typer(config_app, name="config")
 
 
@@ -422,7 +422,7 @@ def config_init(
 ):
     """Create a local .wtfa.toml template in the projects root."""
     cfg = _cfg_from_ctx(root, worktree_root, branch_prefix)
-    path = cfg.ws_local_path
+    path = cfg.local_config_path
     if path.exists() and not force:
         raise typer.BadParameter(f"{path} already exists (use --force to overwrite).")
     path.write_text(
@@ -458,6 +458,6 @@ def config_show(
         f"editor: {cfg.editor or '(auto)'}\n"
         f"codex: sandbox={cfg.codex.sandbox} approval={cfg.codex.approval} full_auto={cfg.codex.full_auto}\n"
         f"global config: {global_config_path()}\n"
-        f"local config: {cfg.ws_local_path}",
+        f"local config: {cfg.local_config_path}",
         title="wtfa config",
     ))
