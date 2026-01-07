@@ -11,6 +11,9 @@ dist/
 .DS_Store
 .vscode/
 .idea/
+.pytest_cache/
+.pycacheprefix/
+.coverage
 
 # Default worktree root (configurable)
 _wt/

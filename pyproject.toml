@@ -13,11 +13,19 @@ dependencies = [
   "tomli>=2.0.0; python_version < '3.11'",
 ]
 
+[project.optional-dependencies]
+test = [
+  "pytest>=7.0.0",
+]
+
 [project.scripts]
 wtfa = "wtfa.cli:app"
 
 [tool.ruff]
 line-length = 100
+
+[tool.pytest.ini_options]
+addopts = "-q"
 
 [build-system]
 requires = ["setuptools>=69.0.0"]
