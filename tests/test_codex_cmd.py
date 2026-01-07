@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from wtfa.codex import codex_cmd
-from wtfa.config import CodexConfig
+from pal.codex import codex_cmd
+from pal.config import CodexConfig
 
 
 def test_codex_cmd_full_auto_is_flag() -> None:

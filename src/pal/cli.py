@@ -21,10 +21,11 @@ from .git import (
 )
 from .vscode import write_code_workspace
 from .codex import run_interactive, run_exec
+from .local_files import copy_local_files, resolve_local_file_paths
 
 app = typer.Typer(
     add_completion=True,
-    help="Worktree for Agents: multi-repo feature workspaces using git worktrees (Codex-friendly).",
+    help="Pal: multi-repo feature workspaces using git worktrees (Codex-friendly).",
     no_args_is_help=True,
 )
 console = Console()
@@ -64,7 +65,7 @@ def _require_root_repo(cfg, repo: str) -> Path:
 @app.callback()
 def main():
     """
-    wtfa creates per-feature multi-repo workspaces using git worktrees.
+    pal creates per-feature multi-repo workspaces using git worktrees.
     It also generates VS Code / Cursor multi-root workspaces per feature.
     """
 
@@ -106,7 +107,7 @@ def doctor(
     if exists_on_path("cursor") or exists_on_path("code"):
         chk("cursor" if exists_on_path("cursor") else "code", "Editor (auto-detected)")
     else:
-        console.print("[yellow]•[/yellow] Editor: cursor/code not found (wtfa open will still write .code-workspace)")
+        console.print("[yellow]•[/yellow] Editor: cursor/code not found (pal open will still write .code-workspace)")
 
     console.print()
     console.print(Panel.fit(
@@ -116,7 +117,7 @@ def doctor(
         f"branch_prefix: {cfg.branch_prefix}\n"
         f"global config: {global_config_path()}\n"
         f"local config: {cfg.local_config_path}",
-        title="wtfa",
+        title="pal",
     ))
 
     raise typer.Exit(code=0 if ok else 1)
@@ -133,7 +134,7 @@ def repos(
 
     repos = cfg.repos if cfg.repos else list_child_repos(cfg.root)
     if not repos:
-        console.print("[yellow]No repos found.[/yellow] Put repos under root or set repos=[...] in .wtfa.toml.")
+        console.print("[yellow]No repos found.[/yellow] Put repos under root or set repos=[...] in .pal.toml.")
         raise typer.Exit(code=1)
 
     table = Table(title="Repos", show_header=True, header_style="bold")
@@ -156,7 +157,7 @@ def ls(
 
     features = sorted([p.name for p in cfg.worktree_root.iterdir() if p.is_dir()])
     if not features:
-        console.print("[yellow]No feature workspaces yet.[/yellow] Try: wtfa new <feature> <repo...>")
+        console.print("[yellow]No feature workspaces yet.[/yellow] Try: pal new <feature> <repo...>")
         return
 
     table = Table(title="Feature workspaces", header_style="bold")
@@ -187,6 +188,30 @@ def _refresh_workspace(cfg, feature: str) -> Path:
     return ws_path
 
 
+def _sync_local_files(cfg, feature: str, repo: str, *, overwrite: bool) -> None:
+    repo_path = _require_root_repo(cfg, repo)
+    wt_path = _worktree_path(cfg, feature, repo)
+    repo_cfg = cfg.local_files.repos.get(repo)
+
+    resolved_paths, skipped_invalid = resolve_local_file_paths(
+        repo_path,
+        paths=list(cfg.local_files.paths) + (list(repo_cfg.paths) if repo_cfg else []),
+        patterns=list(cfg.local_files.patterns) + (list(repo_cfg.patterns) if repo_cfg else []),
+    )
+
+    if not resolved_paths and not skipped_invalid:
+        return
+
+    result = copy_local_files(repo_path, wt_path, paths=resolved_paths, overwrite=overwrite)
+    if result.copied:
+        console.print(f"[green]✓[/green] copied local files for {repo}: {len(result.copied)}")
+    if result.skipped_existing:
+        console.print(f"[yellow]•[/yellow] skipped existing in worktree for {repo}: {len(result.skipped_existing)}")
+    invalid_count = len(result.skipped_invalid) + len(skipped_invalid)
+    if invalid_count:
+        console.print(f"[yellow]•[/yellow] skipped invalid specs for {repo}: {invalid_count}")
+
+
 @app.command()
 def new(
     feature: str = typer.Argument(..., help="Feature workspace name (folder under worktree_root)."),
@@ -194,11 +219,25 @@ def new(
     root: Path = typer.Option(Path("."), "--root", "-r"),
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
     branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
+    copy_local: Optional[bool] = typer.Option(
+        None,
+        "--copy-local/--no-copy-local",
+        help="Copy local (uncommitted) files into new worktrees (default: config).",
+    ),
+    overwrite_local: Optional[bool] = typer.Option(
+        None,
+        "--overwrite-local/--no-overwrite-local",
+        help="Overwrite existing local files in the worktree when copying (default: config).",
+    ),
 ):
     """Create a new feature workspace with worktrees for the given repos."""
     cfg = _cfg_from_ctx(root, worktree_root, branch_prefix)
+    do_copy = cfg.local_files.enabled if copy_local is None else copy_local
+    do_overwrite = cfg.local_files.overwrite if overwrite_local is None else overwrite_local
     for r in repos:
         _ensure_worktree(cfg, feature, r)
+        if do_copy:
+            _sync_local_files(cfg, feature, r, overwrite=do_overwrite)
     ws_path = _refresh_workspace(cfg, feature)
     console.print(f"[green]✓[/green] workspace: {ws_path}")
 
@@ -210,11 +249,25 @@ def add(
     root: Path = typer.Option(Path("."), "--root", "-r"),
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
     branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
+    copy_local: Optional[bool] = typer.Option(
+        None,
+        "--copy-local/--no-copy-local",
+        help="Copy local (uncommitted) files into worktrees (default: config).",
+    ),
+    overwrite_local: Optional[bool] = typer.Option(
+        None,
+        "--overwrite-local/--no-overwrite-local",
+        help="Overwrite existing local files in the worktree when copying (default: config).",
+    ),
 ):
     """Add more repos (worktrees) to an existing feature workspace."""
     cfg = _cfg_from_ctx(root, worktree_root, branch_prefix)
+    do_copy = cfg.local_files.enabled if copy_local is None else copy_local
+    do_overwrite = cfg.local_files.overwrite if overwrite_local is None else overwrite_local
     for r in repos:
         _ensure_worktree(cfg, feature, r)
+        if do_copy:
+            _sync_local_files(cfg, feature, r, overwrite=do_overwrite)
     ws_path = _refresh_workspace(cfg, feature)
     console.print(f"[green]✓[/green] updated workspace: {ws_path}")
     console.print("[yellow]Tip:[/yellow] Restart an interactive Codex session if it's already running.")
@@ -411,7 +464,7 @@ def rm(
     console.print("[green]✓[/green] removed")
 
 
-config_app = typer.Typer(help="Manage wtfa configuration files.")
+config_app = typer.Typer(help="Manage pal configuration files.")
 app.add_typer(config_app, name="config")
 
 
@@ -420,15 +473,15 @@ def config_init(
     root: Path = typer.Option(Path("."), "--root", "-r"),
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
     branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
-    force: bool = typer.Option(False, "--force", help="Overwrite existing .wtfa.toml"),
+    force: bool = typer.Option(False, "--force", help="Overwrite existing .pal.toml"),
 ):
-    """Create a local .wtfa.toml template in the projects root."""
+    """Create a local .pal.toml template in the projects root."""
     cfg = _cfg_from_ctx(root, worktree_root, branch_prefix)
     path = cfg.local_config_path
     if path.exists() and not force:
         raise typer.BadParameter(f"{path} already exists (use --force to overwrite).")
     path.write_text(
-        "# wtfa local configuration (TOML)\n"
+        "# pal local configuration (TOML)\n"
         'root = "."\n'
         'worktree_root = "_wt"\n'
         'branch_prefix = "feat"\n'
@@ -438,7 +491,20 @@ def config_init(
         "[codex]\n"
         'sandbox = "workspace-write"\n'
         'approval = "on-request"\n'
-        "full_auto = false\n",
+        "full_auto = false\n"
+        "\n"
+        "[local_files]\n"
+        "enabled = false\n"
+        "overwrite = false\n"
+        "# Paths are explicit repo-relative files:\n"
+        '# paths = ["backend/.env.prod.local"]\n'
+        "# Patterns are repo-relative globs (supports **):\n"
+        '# patterns = ["**/.env*", "**/.npmrc", "**/.envrc"]\n'
+        "\n"
+        "# Per-repo overrides:\n"
+        "# [local_files.repos.integrations]\n"
+        '# paths = ["apps/searcher/collections/.env"]\n'
+        '# patterns = ["apps/**/.npmrc"]\n',
         encoding="utf-8",
     )
     console.print(f"[green]✓[/green] wrote {path}")
@@ -461,5 +527,5 @@ def config_show(
         f"codex: sandbox={cfg.codex.sandbox} approval={cfg.codex.approval} full_auto={cfg.codex.full_auto}\n"
         f"global config: {global_config_path()}\n"
         f"local config: {cfg.local_config_path}",
-        title="wtfa config",
+        title="pal config",
     ))

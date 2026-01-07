@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from wtfa.cli import app
+from pal.cli import app
 
 
 runner = CliRunner()
@@ -31,10 +31,10 @@ def test_codex_forwards_args_to_codex_resume(tmp_path: Path, monkeypatch: pytest
         calls.append(cmd)
         return subprocess.CompletedProcess(cmd, 0)
 
-    # Patch the subprocess used by wtfa.codex.run_interactive
+    # Patch the subprocess used by pal.codex.run_interactive
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    # Create feature workspace dir so `wtfa codex` passes validation.
+    # Create feature workspace dir so `pal codex` passes validation.
     root = tmp_path / "projects"
     (root / "_wt" / "feat-auth").mkdir(parents=True)
 

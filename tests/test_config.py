@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from wtfa.config import load_config
-from wtfa.cli import app
+from pal.config import load_config
+from pal.cli import app
 
 try:
     import tomllib  # py>=3.11
@@ -32,7 +32,7 @@ def test_config_init_writes_valid_toml(tmp_path: Path) -> None:
     result = runner.invoke(app, ["config", "init", "--root", str(tmp_path)])
     assert result.exit_code == 0, result.output
 
-    ws_local_path = tmp_path / ".wtfa.toml"
+    ws_local_path = tmp_path / ".pal.toml"
     assert ws_local_path.exists()
 
     parsed = tomllib.loads(ws_local_path.read_text(encoding="utf-8"))
@@ -42,3 +42,28 @@ def test_config_init_writes_valid_toml(tmp_path: Path) -> None:
     assert parsed["codex"]["sandbox"] == "workspace-write"
     assert parsed["codex"]["approval"] == "on-request"
     assert parsed["codex"]["full_auto"] is False
+
+
+def test_load_config_parses_local_files(tmp_path: Path) -> None:
+    (tmp_path / ".pal.toml").write_text(
+        'root = "."\n'
+        "\n"
+        "[local_files]\n"
+        "enabled = true\n"
+        "overwrite = false\n"
+        'paths = [".env"]\n'
+        'patterns = ["**/.npmrc"]\n'
+        "\n"
+        "[local_files.repos.integrations]\n"
+        'paths = ["apps/searcher/collections/.env"]\n'
+        'patterns = ["apps/**/.npmrc"]\n',
+        encoding="utf-8",
+    )
+
+    cfg = load_config(root=tmp_path, cli_overrides={"root": str(tmp_path)})
+    assert cfg.local_files.enabled is True
+    assert cfg.local_files.overwrite is False
+    assert cfg.local_files.paths == [".env"]
+    assert cfg.local_files.patterns == ["**/.npmrc"]
+    assert cfg.local_files.repos["integrations"].paths == ["apps/searcher/collections/.env"]
+    assert cfg.local_files.repos["integrations"].patterns == ["apps/**/.npmrc"]

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from wtfa.git import worktree_add
+from pal.git import worktree_add
 
 
 def test_worktree_add_create_branch_uses_correct_git_args(

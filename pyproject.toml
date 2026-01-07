@@ -1,7 +1,7 @@
 [project]
-name = "wtfa"
+name = "pal"
 version = "0.1.0"
-description = "Worktree for Agents: multi-repo feature workspaces using git worktrees."
+description = "Pal: multi-repo feature workspaces using git worktrees (Codex-friendly)."
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
@@ -19,13 +19,16 @@ test = [
 ]
 
 [project.scripts]
-wtfa = "wtfa.cli:app"
+pal = "pal.cli:app"
 
 [tool.ruff]
 line-length = 100
 
 [tool.pytest.ini_options]
 addopts = "-q"
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [build-system]
 requires = ["setuptools>=69.0.0"]
