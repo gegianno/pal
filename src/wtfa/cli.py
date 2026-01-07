@@ -276,8 +276,9 @@ def open(
     console.print("[green]✓[/green] opened")
 
 
-@app.command()
+@app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def codex(
+    ctx: typer.Context,
     feature: str = typer.Argument(...),
     full_auto: Optional[bool] = typer.Option(None, "--full-auto", help="Pass --full-auto to Codex (overrides config)."),
     sandbox: Optional[str] = typer.Option(None, "--sandbox", help="Codex sandbox policy override."),
@@ -309,7 +310,8 @@ def codex(
         f"codex: sandbox={cfg.codex.sandbox} approval={cfg.codex.approval} full_auto={cfg.codex.full_auto}",
         title="Launching Codex",
     ))
-    run_interactive(feature_dir, cfg.codex)
+    extra = list(ctx.args)
+    run_interactive(feature_dir, cfg.codex, extra_args=extra if extra else None)
 
 
 @app.command()

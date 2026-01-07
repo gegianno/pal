@@ -55,6 +55,9 @@ wtfa open feat-auth       # opens a multi-root workspace in Cursor/VS Code (if d
 
 wtfa codex feat-auth      # interactive Codex, write-limited to _wt/feat-auth
 wtfa exec feat-auth "Implement X and run tests"
+
+# You can also forward Codex subcommands, e.g. resuming a session:
+wtfa codex feat-auth resume 019b947b-ff0f-7ff3-8a49-4723ee751f20
 ```
 
 If later you realize you need another repo:
