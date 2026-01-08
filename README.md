@@ -130,6 +130,12 @@ sandbox = "workspace-write"   # read-only | workspace-write | danger-full-access
 approval = "on-request"       # untrusted | on-failure | on-request | never
 full_auto = false             # if true, passes --full-auto
 
+[agent]
+# Optional extra writable roots that apply to agent runners (Codex today).
+# Useful when tools need to write caches under your home directory (e.g. ~/.npm, ~/.cache/prisma).
+# pal forwards these to Codex as repeated `--add-dir` flags.
+add_dirs = ["~/.npm", "~/.cache/prisma"]
+
 [local_files]
 # If enabled, pal can copy local (uncommitted/ignored) files (like `.env`, `.npmrc`) from your
 # “human” checkouts into new feature worktrees to speed up setup.

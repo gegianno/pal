@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from typing import Optional
 
 from .config import CodexConfig
+
+
+def _normalize_add_dir(workspace_dir: Path, raw: str) -> str:
+    expanded = os.path.expandvars(raw)
+    p = Path(expanded).expanduser()
+    if not p.is_absolute():
+        p = workspace_dir / p
+    return str(p.resolve())
 
 
 def codex_cmd(
@@ -23,6 +32,7 @@ def codex_cmd(
     - --cd sets the working directory (workspace root)
     - --sandbox workspace-write restricts writes to the workspace
     - --ask-for-approval sets approval policy
+    - --add-dir adds extra writable roots (optional, repeatable)
     - --full-auto (optional) mirrors Codex CLI shortcut: approval on-request + workspace-write
     """
     cmd = ["codex", "--cd", str(workspace_dir)]
@@ -32,19 +42,24 @@ def codex_cmd(
     else:
         cmd += ["--sandbox", codex.sandbox, "--ask-for-approval", codex.approval]
 
+    for raw_dir in codex.add_dirs:
+        raw_dir = str(raw_dir).strip()
+        if not raw_dir:
+            continue
+        cmd += ["--add-dir", _normalize_add_dir(workspace_dir, raw_dir)]
+
     if extra_args:
         cmd += extra_args
-        return cmd
-
-    if non_interactive:
-        cmd += ["exec"]
-        # For exec mode, prompt is required
-        if prompt is None:
-            raise ValueError("prompt is required for exec")
-        cmd.append(prompt)
     else:
-        if prompt:
+        if non_interactive:
+            cmd += ["exec"]
+            # For exec mode, prompt is required
+            if prompt is None:
+                raise ValueError("prompt is required for exec")
             cmd.append(prompt)
+        else:
+            if prompt:
+                cmd.append(prompt)
     return cmd
 
 

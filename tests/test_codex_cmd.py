@@ -25,3 +25,14 @@ def test_codex_cmd_allows_extra_args_passthrough() -> None:
     )
     assert cmd[:3] == ["codex", "--cd", "/workspace"]
     assert "resume" in cmd
+
+
+def test_codex_cmd_add_dirs_adds_add_dir_flags() -> None:
+    cmd = codex_cmd(
+        Path("/workspace"),
+        prompt="hi",
+        non_interactive=True,
+        codex=CodexConfig(add_dirs=["/tmp/a", "/tmp/b"]),
+    )
+    assert cmd[:3] == ["codex", "--cd", "/workspace"]
+    assert cmd.count("--add-dir") == 2

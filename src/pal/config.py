@@ -17,6 +17,16 @@ class CodexConfig:
     sandbox: str = "workspace-write"  # read-only | workspace-write | danger-full-access
     approval: str = "on-request"      # untrusted | on-failure | on-request | never
     full_auto: bool = False
+    # Extra writable roots to pass through to Codex as repeated `--add-dir <path>` flags.
+    # Useful for tool caches like ~/.npm or ~/.cache/prisma when running in workspace-write mode.
+    add_dirs: list[str] = field(default_factory=list)
+
+
+@dataclass
+class AgentConfig:
+    # Extra writable roots that apply to any agent runner (Codex today; other agents later).
+    # Each runner can map these to its equivalent flags/settings.
+    add_dirs: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -44,6 +54,7 @@ class PalConfig:
     branch_prefix: str = "feat"
     repos: list[str] = field(default_factory=list)  # optional allowlist
     editor: str = ""                                # cursor | code | "" (auto)
+    agent: AgentConfig = field(default_factory=AgentConfig)
     codex: CodexConfig = field(default_factory=CodexConfig)
     local_files: LocalFilesConfig = field(default_factory=LocalFilesConfig)
 
@@ -129,6 +140,17 @@ def _apply_dict(cfg: PalConfig, d: dict[str, Any]) -> None:
     if "editor" in d:
         cfg.editor = str(d["editor"])
 
+    agent = d.get("agent")
+    if isinstance(agent, dict):
+        if "add_dirs" in agent and isinstance(agent["add_dirs"], list):
+            cfg.agent.add_dirs = [str(x) for x in agent["add_dirs"]]
+        elif "add_dir" in agent:
+            v = agent["add_dir"]
+            if isinstance(v, list):
+                cfg.agent.add_dirs = [str(x) for x in v]
+            elif isinstance(v, str):
+                cfg.agent.add_dirs = [v]
+
     codex = d.get("codex")
     if isinstance(codex, dict):
         if "sandbox" in codex:
@@ -137,6 +159,15 @@ def _apply_dict(cfg: PalConfig, d: dict[str, Any]) -> None:
             cfg.codex.approval = str(codex["approval"])
         if "full_auto" in codex:
             cfg.codex.full_auto = bool(codex["full_auto"])
+        # Support both `add_dirs = [...]` and legacy-ish `add_dir = "..."`.
+        if "add_dirs" in codex and isinstance(codex["add_dirs"], list):
+            cfg.codex.add_dirs = [str(x) for x in codex["add_dirs"]]
+        elif "add_dir" in codex:
+            v = codex["add_dir"]
+            if isinstance(v, list):
+                cfg.codex.add_dirs = [str(x) for x in v]
+            elif isinstance(v, str):
+                cfg.codex.add_dirs = [v]
 
     local_files = d.get("local_files")
     if isinstance(local_files, dict):

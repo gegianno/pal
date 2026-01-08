@@ -67,3 +67,27 @@ def test_load_config_parses_local_files(tmp_path: Path) -> None:
     assert cfg.local_files.patterns == ["**/.npmrc"]
     assert cfg.local_files.repos["integrations"].paths == ["apps/searcher/collections/.env"]
     assert cfg.local_files.repos["integrations"].patterns == ["apps/**/.npmrc"]
+
+
+def test_load_config_parses_codex_add_dirs(tmp_path: Path) -> None:
+    (tmp_path / ".pal.toml").write_text(
+        'root = "."\n'
+        "\n"
+        "[codex]\n"
+        'add_dirs = ["/tmp/a", "/tmp/b"]\n',
+        encoding="utf-8",
+    )
+    cfg = load_config(root=tmp_path, cli_overrides={"root": str(tmp_path)})
+    assert cfg.codex.add_dirs == ["/tmp/a", "/tmp/b"]
+
+
+def test_load_config_parses_agent_add_dirs(tmp_path: Path) -> None:
+    (tmp_path / ".pal.toml").write_text(
+        'root = "."\n'
+        "\n"
+        "[agent]\n"
+        'add_dirs = ["/tmp/a", "/tmp/b"]\n',
+        encoding="utf-8",
+    )
+    cfg = load_config(root=tmp_path, cli_overrides={"root": str(tmp_path)})
+    assert cfg.agent.add_dirs == ["/tmp/a", "/tmp/b"]

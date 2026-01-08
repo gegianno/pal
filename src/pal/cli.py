@@ -336,6 +336,11 @@ def codex(
     full_auto: Optional[bool] = typer.Option(None, "--full-auto", help="Pass --full-auto to Codex (overrides config)."),
     sandbox: Optional[str] = typer.Option(None, "--sandbox", help="Codex sandbox policy override."),
     approval: Optional[str] = typer.Option(None, "--approval", help="Codex approval policy override."),
+    add_dir: List[str] = typer.Option(
+        [],
+        "--add-dir",
+        help="Additional writable dir(s) for Codex (repeatable). Useful for caches like ~/.npm.",
+    ),
     root: Path = typer.Option(Path("."), "--root", "-r"),
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
     branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
@@ -357,6 +362,14 @@ def codex(
         cfg.codex.sandbox = sandbox
     if approval is not None:
         cfg.codex.approval = approval
+    if add_dir:
+        cfg.codex.add_dirs.extend([str(x) for x in add_dir])
+
+    # Agent-level writable roots apply to Codex too (mapped to Codex `--add-dir` flags).
+    if cfg.agent.add_dirs:
+        merged = [*cfg.agent.add_dirs, *cfg.codex.add_dirs]
+        # preserve order while de-duping
+        cfg.codex.add_dirs = list(dict.fromkeys(merged))
 
     console.print(Panel.fit(
         f"workspace: {feature_dir}\n"
@@ -374,6 +387,11 @@ def exec(
     full_auto: Optional[bool] = typer.Option(None, "--full-auto", help="Pass --full-auto to Codex (overrides config)."),
     sandbox: Optional[str] = typer.Option(None, "--sandbox", help="Codex sandbox policy override."),
     approval: Optional[str] = typer.Option(None, "--approval", help="Codex approval policy override."),
+    add_dir: List[str] = typer.Option(
+        [],
+        "--add-dir",
+        help="Additional writable dir(s) for Codex (repeatable). Useful for caches like ~/.npm.",
+    ),
     root: Path = typer.Option(Path("."), "--root", "-r"),
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
     branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
@@ -390,6 +408,14 @@ def exec(
         cfg.codex.sandbox = sandbox
     if approval is not None:
         cfg.codex.approval = approval
+    if add_dir:
+        cfg.codex.add_dirs.extend([str(x) for x in add_dir])
+
+    # Agent-level writable roots apply to Codex too (mapped to Codex `--add-dir` flags).
+    if cfg.agent.add_dirs:
+        merged = [*cfg.agent.add_dirs, *cfg.codex.add_dirs]
+        # preserve order while de-duping
+        cfg.codex.add_dirs = list(dict.fromkeys(merged))
 
     console.print(Panel.fit(
         f"workspace: {feature_dir}\n"
@@ -493,6 +519,9 @@ def config_init(
         'approval = "on-request"\n'
         "full_auto = false\n"
         "\n"
+        "[agent]\n"
+        '# add_dirs = ["~/.npm", "~/.cache/prisma"]\n'
+        "\n"
         "[local_files]\n"
         "enabled = false\n"
         "overwrite = false\n"
@@ -524,7 +553,9 @@ def config_show(
         f"branch_prefix: {cfg.branch_prefix}\n"
         f"repos allowlist: {cfg.repos if cfg.repos else '(auto)'}\n"
         f"editor: {cfg.editor or '(auto)'}\n"
+        f"agent: add_dirs={cfg.agent.add_dirs}\n"
         f"codex: sandbox={cfg.codex.sandbox} approval={cfg.codex.approval} full_auto={cfg.codex.full_auto}\n"
+        f"codex: add_dirs={cfg.codex.add_dirs}\n"
         f"global config: {global_config_path()}\n"
         f"local config: {cfg.local_config_path}",
         title="pal config",
