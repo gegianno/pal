@@ -63,7 +63,9 @@ def codex_cmd(
     return cmd
 
 
-def run_interactive(workspace_dir: Path, codex_cfg: CodexConfig, *, extra_args: Optional[list[str]] = None) -> None:
+def run_interactive(
+    workspace_dir: Path, codex_cfg: CodexConfig, *, extra_args: Optional[list[str]] = None
+) -> None:
     subprocess.run(
         codex_cmd(workspace_dir, non_interactive=False, codex=codex_cfg, extra_args=extra_args),
         check=True,
@@ -71,4 +73,6 @@ def run_interactive(workspace_dir: Path, codex_cfg: CodexConfig, *, extra_args: 
 
 
 def run_exec(workspace_dir: Path, prompt: str, codex_cfg: CodexConfig) -> None:
-    subprocess.run(codex_cmd(workspace_dir, prompt, non_interactive=True, codex=codex_cfg), check=True)
+    subprocess.run(
+        codex_cmd(workspace_dir, prompt, non_interactive=True, codex=codex_cfg), check=True
+    )

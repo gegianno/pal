@@ -41,4 +41,3 @@ def test_complete_repo_in_feature_lists_only_git_repos(tmp_path: Path, monkeypat
 
     out = complete_repo_in_feature(ctx, [], "")
     assert out == ["repo1"]
-

@@ -15,7 +15,7 @@ except Exception:  # pragma: no cover
 @dataclass
 class CodexConfig:
     sandbox: str = "workspace-write"  # read-only | workspace-write | danger-full-access
-    approval: str = "on-request"      # untrusted | on-failure | on-request | never
+    approval: str = "on-request"  # untrusted | on-failure | on-request | never
     full_auto: bool = False
     # Extra writable roots to pass through to Codex as repeated `--add-dir <path>` flags.
     # Useful for tool caches like ~/.npm or ~/.cache/prisma when running in workspace-write mode.
@@ -53,7 +53,7 @@ class PalConfig:
     worktree_root: Path
     branch_prefix: str = "feat"
     repos: list[str] = field(default_factory=list)  # optional allowlist
-    editor: str = ""                                # cursor | code | "" (auto)
+    editor: str = ""  # cursor | code | "" (auto)
     agent: AgentConfig = field(default_factory=AgentConfig)
     codex: CodexConfig = field(default_factory=CodexConfig)
     local_files: LocalFilesConfig = field(default_factory=LocalFilesConfig)
@@ -123,7 +123,9 @@ def load_config(
     # Normalize paths
     cfg.root = Path(cfg.root).expanduser().resolve()
     wt_root = Path(cfg.worktree_root).expanduser()
-    cfg.worktree_root = (cfg.root / wt_root).resolve() if not wt_root.is_absolute() else wt_root.resolve()
+    cfg.worktree_root = (
+        (cfg.root / wt_root).resolve() if not wt_root.is_absolute() else wt_root.resolve()
+    )
 
     return cfg
 

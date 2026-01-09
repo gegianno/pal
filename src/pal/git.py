@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Optional
 
 
 def run(cmd: list[str], cwd: Optional[Path] = None) -> str:
@@ -19,6 +19,7 @@ def run(cmd: list[str], cwd: Optional[Path] = None) -> str:
 
 def exists_on_path(exe: str) -> bool:
     import shutil
+
     return shutil.which(exe) is not None
 
 
@@ -52,7 +53,15 @@ def list_child_repos(root: Path) -> list[str]:
 def branch_exists(repo_path: Path, branch: str) -> bool:
     try:
         subprocess.run(
-            ["git", "-C", str(repo_path), "show-ref", "--verify", "--quiet", f"refs/heads/{branch}"],
+            [
+                "git",
+                "-C",
+                str(repo_path),
+                "show-ref",
+                "--verify",
+                "--quiet",
+                f"refs/heads/{branch}",
+            ],
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

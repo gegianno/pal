@@ -17,5 +17,7 @@ def write_code_workspace(feature_dir: Path, feature: str) -> Path:
             folders.append({"path": child.name})
 
     ws_path = feature_dir / f"{feature}.code-workspace"
-    ws_path.write_text(json.dumps({"folders": folders, "settings": {}}, indent=2) + "\n", encoding="utf-8")
+    ws_path.write_text(
+        json.dumps({"folders": folders, "settings": {}}, indent=2) + "\n", encoding="utf-8"
+    )
     return ws_path

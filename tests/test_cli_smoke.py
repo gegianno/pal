@@ -23,7 +23,9 @@ def test_rm_help_exposes_repo_option() -> None:
     assert "--repo" in result.output
 
 
-def test_codex_forwards_args_to_codex_resume(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_codex_forwards_args_to_codex_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls: list[list[str]] = []
 
     def fake_run(cmd, check=True, **_kwargs):  # noqa: ANN001

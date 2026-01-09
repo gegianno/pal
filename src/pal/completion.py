@@ -32,7 +32,13 @@ def complete_feature(ctx: click.Context, args: list[str], incomplete: str):
         cfg = _cfg_from_ctx(ctx)
         if not cfg.worktree_root.exists():
             return []
-        return sorted([p.name for p in cfg.worktree_root.iterdir() if p.is_dir() and _starts_with(p.name, incomplete)])
+        return sorted(
+            [
+                p.name
+                for p in cfg.worktree_root.iterdir()
+                if p.is_dir() and _starts_with(p.name, incomplete)
+            ]
+        )
     except Exception:
         return []
 

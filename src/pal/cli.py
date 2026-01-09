@@ -136,18 +136,22 @@ def doctor(
     if exists_on_path("cursor") or exists_on_path("code"):
         chk("cursor" if exists_on_path("cursor") else "code", "Editor (auto-detected)")
     else:
-        console.print("[yellow]•[/yellow] Editor: cursor/code not found (pal open will still write .code-workspace)")
+        console.print(
+            "[yellow]•[/yellow] Editor: cursor/code not found (pal open will still write .code-workspace)"
+        )
 
     console.print()
-    console.print(Panel.fit(
-        f"[bold]Resolved config[/bold]\n"
-        f"root: {cfg.root}\n"
-        f"worktree_root: {cfg.worktree_root}\n"
-        f"branch_prefix: {cfg.branch_prefix}\n"
-        f"global config: {global_config_path()}\n"
-        f"local config: {cfg.local_config_path}",
-        title="pal",
-    ))
+    console.print(
+        Panel.fit(
+            f"[bold]Resolved config[/bold]\n"
+            f"root: {cfg.root}\n"
+            f"worktree_root: {cfg.worktree_root}\n"
+            f"branch_prefix: {cfg.branch_prefix}\n"
+            f"global config: {global_config_path()}\n"
+            f"local config: {cfg.local_config_path}",
+            title="pal",
+        )
+    )
 
     raise typer.Exit(code=0 if ok else 1)
 
@@ -163,7 +167,9 @@ def repos(
 
     repos = cfg.repos if cfg.repos else list_child_repos(cfg.root)
     if not repos:
-        console.print("[yellow]No repos found.[/yellow] Put repos under root or set repos=[...] in .pal.toml.")
+        console.print(
+            "[yellow]No repos found.[/yellow] Put repos under root or set repos=[...] in .pal.toml."
+        )
         raise typer.Exit(code=1)
 
     table = Table(title="Repos", show_header=True, header_style="bold")
@@ -186,7 +192,9 @@ def ls(
 
     features = sorted([p.name for p in cfg.worktree_root.iterdir() if p.is_dir()])
     if not features:
-        console.print("[yellow]No feature workspaces yet.[/yellow] Try: pal new <feature> <repo...>")
+        console.print(
+            "[yellow]No feature workspaces yet.[/yellow] Try: pal new <feature> <repo...>"
+        )
         return
 
     table = Table(title="Feature workspaces", header_style="bold")
@@ -206,7 +214,9 @@ def _ensure_worktree(cfg, feature: str, repo: str) -> None:
 
     b = _branch(cfg, feature)
     create = not branch_exists(repo_path, b)
-    console.print(f"[cyan]+[/cyan] worktree add {feature}/{repo} → {wt_path} (branch {b}{' [new]' if create else ''})")
+    console.print(
+        f"[cyan]+[/cyan] worktree add {feature}/{repo} → {wt_path} (branch {b}{' [new]' if create else ''})"
+    )
     worktree_add(repo_path, wt_path, b, create=create)
 
 
@@ -235,7 +245,9 @@ def _sync_local_files(cfg, feature: str, repo: str, *, overwrite: bool) -> None:
     if result.copied:
         console.print(f"[green]✓[/green] copied local files for {repo}: {len(result.copied)}")
     if result.skipped_existing:
-        console.print(f"[yellow]•[/yellow] skipped existing in worktree for {repo}: {len(result.skipped_existing)}")
+        console.print(
+            f"[yellow]•[/yellow] skipped existing in worktree for {repo}: {len(result.skipped_existing)}"
+        )
     invalid_count = len(result.skipped_invalid) + len(skipped_invalid)
     if invalid_count:
         console.print(f"[yellow]•[/yellow] skipped invalid specs for {repo}: {invalid_count}")
@@ -244,7 +256,9 @@ def _sync_local_files(cfg, feature: str, repo: str, *, overwrite: bool) -> None:
 @app.command()
 def new(
     feature: str = typer.Argument(..., help="Feature workspace name (folder under worktree_root)."),
-    repos: List[str] = typer.Argument(..., help="One or more repo folder names under root.", autocompletion=complete_repo),
+    repos: List[str] = typer.Argument(
+        ..., help="One or more repo folder names under root.", autocompletion=complete_repo
+    ),
     root: Path = typer.Option(Path("."), "--root", "-r"),
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
     branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
@@ -273,8 +287,12 @@ def new(
 
 @app.command()
 def add(
-    feature: str = typer.Argument(..., help="Existing feature workspace name.", autocompletion=complete_feature),
-    repos: List[str] = typer.Argument(..., help="One or more repos to add to the feature workspace.", autocompletion=complete_repo),
+    feature: str = typer.Argument(
+        ..., help="Existing feature workspace name.", autocompletion=complete_feature
+    ),
+    repos: List[str] = typer.Argument(
+        ..., help="One or more repos to add to the feature workspace.", autocompletion=complete_repo
+    ),
     root: Path = typer.Option(Path("."), "--root", "-r"),
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
     branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
@@ -299,12 +317,16 @@ def add(
             _sync_local_files(cfg, feature, r, overwrite=do_overwrite)
     ws_path = _refresh_workspace(cfg, feature)
     console.print(f"[green]✓[/green] updated workspace: {ws_path}")
-    console.print("[yellow]Tip:[/yellow] Restart an interactive Codex session if it's already running.")
+    console.print(
+        "[yellow]Tip:[/yellow] Restart an interactive Codex session if it's already running."
+    )
 
 
 @app.command()
 def status(
-    feature: str = typer.Argument(..., help="Feature workspace name.", autocompletion=complete_feature),
+    feature: str = typer.Argument(
+        ..., help="Feature workspace name.", autocompletion=complete_feature
+    ),
     root: Path = typer.Option(Path("."), "--root", "-r"),
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
     branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
@@ -334,7 +356,9 @@ def status(
 @app.command()
 def open(
     feature: str = typer.Argument(..., autocompletion=complete_feature),
-    editor: str = typer.Option("", "--editor", help="Force editor command (cursor|code). Auto-detect if empty."),
+    editor: str = typer.Option(
+        "", "--editor", help="Force editor command (cursor|code). Auto-detect if empty."
+    ),
     root: Path = typer.Option(Path("."), "--root", "-r"),
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
     branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
@@ -349,11 +373,14 @@ def open(
     ed = _detect_editor(editor or cfg.editor)
     if not ed:
         console.print(f"[green]✓[/green] wrote workspace: {ws_path}")
-        console.print("[yellow]Editor not found.[/yellow] Install Cursor ('cursor') or VS Code ('code') CLI to auto-open.")
+        console.print(
+            "[yellow]Editor not found.[/yellow] Install Cursor ('cursor') or VS Code ('code') CLI to auto-open."
+        )
         return
 
     console.print(f"[cyan]→[/cyan] opening in {ed}: {ws_path}")
     import subprocess
+
     subprocess.Popen([ed, str(ws_path)])  # intentionally not check=True (editor exits immediately)
     console.print("[green]✓[/green] opened")
 
@@ -362,9 +389,13 @@ def open(
 def codex(
     ctx: typer.Context,
     feature: str = typer.Argument(..., autocompletion=complete_feature),
-    full_auto: Optional[bool] = typer.Option(None, "--full-auto", help="Pass --full-auto to Codex (overrides config)."),
+    full_auto: Optional[bool] = typer.Option(
+        None, "--full-auto", help="Pass --full-auto to Codex (overrides config)."
+    ),
     sandbox: Optional[str] = typer.Option(None, "--sandbox", help="Codex sandbox policy override."),
-    approval: Optional[str] = typer.Option(None, "--approval", help="Codex approval policy override."),
+    approval: Optional[str] = typer.Option(
+        None, "--approval", help="Codex approval policy override."
+    ),
     add_dir: List[str] = typer.Option(
         [],
         "--add-dir",
@@ -400,11 +431,13 @@ def codex(
         # preserve order while de-duping
         cfg.codex.add_dirs = list(dict.fromkeys(merged))
 
-    console.print(Panel.fit(
-        f"workspace: {feature_dir}\n"
-        f"codex: sandbox={cfg.codex.sandbox} approval={cfg.codex.approval} full_auto={cfg.codex.full_auto}",
-        title="Launching Codex",
-    ))
+    console.print(
+        Panel.fit(
+            f"workspace: {feature_dir}\n"
+            f"codex: sandbox={cfg.codex.sandbox} approval={cfg.codex.approval} full_auto={cfg.codex.full_auto}",
+            title="Launching Codex",
+        )
+    )
     extra = list(ctx.args)
     run_interactive(feature_dir, cfg.codex, extra_args=extra if extra else None)
 
@@ -413,9 +446,13 @@ def codex(
 def exec(
     feature: str = typer.Argument(..., autocompletion=complete_feature),
     prompt: str = typer.Argument(..., help="Prompt to run in non-interactive mode."),
-    full_auto: Optional[bool] = typer.Option(None, "--full-auto", help="Pass --full-auto to Codex (overrides config)."),
+    full_auto: Optional[bool] = typer.Option(
+        None, "--full-auto", help="Pass --full-auto to Codex (overrides config)."
+    ),
     sandbox: Optional[str] = typer.Option(None, "--sandbox", help="Codex sandbox policy override."),
-    approval: Optional[str] = typer.Option(None, "--approval", help="Codex approval policy override."),
+    approval: Optional[str] = typer.Option(
+        None, "--approval", help="Codex approval policy override."
+    ),
     add_dir: List[str] = typer.Option(
         [],
         "--add-dir",
@@ -446,12 +483,14 @@ def exec(
         # preserve order while de-duping
         cfg.codex.add_dirs = list(dict.fromkeys(merged))
 
-    console.print(Panel.fit(
-        f"workspace: {feature_dir}\n"
-        f"codex: sandbox={cfg.codex.sandbox} approval={cfg.codex.approval} full_auto={cfg.codex.full_auto}\n"
-        f"prompt: {prompt}",
-        title="Running Codex exec",
-    ))
+    console.print(
+        Panel.fit(
+            f"workspace: {feature_dir}\n"
+            f"codex: sandbox={cfg.codex.sandbox} approval={cfg.codex.approval} full_auto={cfg.codex.full_auto}\n"
+            f"prompt: {prompt}",
+            title="Running Codex exec",
+        )
+    )
     run_exec(feature_dir, prompt, cfg.codex)
 
 
@@ -482,9 +521,12 @@ def rm(
     if not targets:
         # Allow removing empty/broken feature workspaces too (e.g. no git repos left, or stray dirs only).
         if not yes:
-            if not typer.confirm(f"No git worktrees found in '{feature}'. Remove the feature folder anyway?"):
+            if not typer.confirm(
+                f"No git worktrees found in '{feature}'. Remove the feature folder anyway?"
+            ):
                 raise typer.Exit(code=1)
         import shutil
+
         shutil.rmtree(feature_dir, ignore_errors=True)
         console.print("[green]✓[/green] removed")
         return
@@ -513,6 +555,7 @@ def rm(
         _refresh_workspace(cfg, feature)
     else:
         import shutil
+
         shutil.rmtree(feature_dir, ignore_errors=True)
 
     console.print("[green]✓[/green] removed")
@@ -575,16 +618,18 @@ def config_show(
 ):
     """Show resolved configuration."""
     cfg = _cfg_from_ctx(root, worktree_root, branch_prefix)
-    console.print(Panel.fit(
-        f"root: {cfg.root}\n"
-        f"worktree_root: {cfg.worktree_root}\n"
-        f"branch_prefix: {cfg.branch_prefix}\n"
-        f"repos allowlist: {cfg.repos if cfg.repos else '(auto)'}\n"
-        f"editor: {cfg.editor or '(auto)'}\n"
-        f"agent: add_dirs={cfg.agent.add_dirs}\n"
-        f"codex: sandbox={cfg.codex.sandbox} approval={cfg.codex.approval} full_auto={cfg.codex.full_auto}\n"
-        f"codex: add_dirs={cfg.codex.add_dirs}\n"
-        f"global config: {global_config_path()}\n"
-        f"local config: {cfg.local_config_path}",
-        title="pal config",
-    ))
+    console.print(
+        Panel.fit(
+            f"root: {cfg.root}\n"
+            f"worktree_root: {cfg.worktree_root}\n"
+            f"branch_prefix: {cfg.branch_prefix}\n"
+            f"repos allowlist: {cfg.repos if cfg.repos else '(auto)'}\n"
+            f"editor: {cfg.editor or '(auto)'}\n"
+            f"agent: add_dirs={cfg.agent.add_dirs}\n"
+            f"codex: sandbox={cfg.codex.sandbox} approval={cfg.codex.approval} full_auto={cfg.codex.full_auto}\n"
+            f"codex: add_dirs={cfg.codex.add_dirs}\n"
+            f"global config: {global_config_path()}\n"
+            f"local config: {cfg.local_config_path}",
+            title="pal config",
+        )
+    )

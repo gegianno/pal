@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import pytest
@@ -21,7 +20,9 @@ def test_ls_lists_feature_dirs(tmp_path: Path) -> None:
     assert "email" in result.output
 
 
-def test_repos_lists_child_repos_without_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_repos_lists_child_repos_without_git(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # Don't require git in tests; stub discovery.
     root = tmp_path / "projects"
     (root / "repo1").mkdir(parents=True)
@@ -32,7 +33,9 @@ def test_repos_lists_child_repos_without_git(tmp_path: Path, monkeypatch: pytest
     assert "repo1" in result.output
 
 
-def test_open_writes_workspace_even_without_editor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_open_writes_workspace_even_without_editor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     root = tmp_path / "projects"
     feature = "email"
     feature_dir = root / "_wt" / feature
@@ -100,4 +103,3 @@ def test_exec_forwards_prompt_to_runner(tmp_path: Path, monkeypatch: pytest.Monk
     result = runner.invoke(app, ["exec", feature, prompt, "--root", str(root)])
     assert result.exit_code == 0, result.output
     assert calls == [(root / "_wt" / feature, prompt)]
-

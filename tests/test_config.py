@@ -71,10 +71,7 @@ def test_load_config_parses_local_files(tmp_path: Path) -> None:
 
 def test_load_config_parses_codex_add_dirs(tmp_path: Path) -> None:
     (tmp_path / ".pal.toml").write_text(
-        'root = "."\n'
-        "\n"
-        "[codex]\n"
-        'add_dirs = ["/tmp/a", "/tmp/b"]\n',
+        'root = "."\n\n[codex]\nadd_dirs = ["/tmp/a", "/tmp/b"]\n',
         encoding="utf-8",
     )
     cfg = load_config(root=tmp_path, cli_overrides={"root": str(tmp_path)})
@@ -83,10 +80,7 @@ def test_load_config_parses_codex_add_dirs(tmp_path: Path) -> None:
 
 def test_load_config_parses_agent_add_dirs(tmp_path: Path) -> None:
     (tmp_path / ".pal.toml").write_text(
-        'root = "."\n'
-        "\n"
-        "[agent]\n"
-        'add_dirs = ["/tmp/a", "/tmp/b"]\n',
+        'root = "."\n\n[agent]\nadd_dirs = ["/tmp/a", "/tmp/b"]\n',
         encoding="utf-8",
     )
     cfg = load_config(root=tmp_path, cli_overrides={"root": str(tmp_path)})

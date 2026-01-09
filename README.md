@@ -9,7 +9,7 @@ It also generates a **VS Code / Cursor multi-root workspace** per feature so you
 
 ## Why this exists
 
-- Git worktrees are **per repository**, but features often span multiple repos.  
+- Git worktrees are **per repository**, but features often span multiple repos.
 - Coding agents (Codex, etc.) work best when their writable surface area is **small**.
 - You want **projects-level visibility**, but **feature-level isolation**.
 
@@ -80,10 +80,10 @@ pal rm feat-auth --repo repo1 --repo repo3
 
 When you run Codex via `pal codex` / `pal exec`, `pal` always launches it with:
 
-- `--cd <feature_workspace_dir>` to set the workspace root  
-- `--sandbox workspace-write` to restrict writes to that workspace directory  
+- `--cd <feature_workspace_dir>` to set the workspace root
+- `--sandbox workspace-write` to restrict writes to that workspace directory
 
-These are **per-invocation flags**, so your global `~/.codex/config.toml` defaults remain unchanged.  
+These are **per-invocation flags**, so your global `~/.codex/config.toml` defaults remain unchanged.
 See Codex CLI flags (`--cd`, `--sandbox`, `--full-auto`) in the official reference.
 
 ---
@@ -196,3 +196,11 @@ pal doctor
 ## License
 
 MIT
+
+## Contributing
+
+Contributions are welcome. Please read:
+
+- `CONTRIBUTING.md`
+- `CODE_OF_CONDUCT.md`
+- `SECURITY.md`
