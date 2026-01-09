@@ -9,6 +9,11 @@ from rich.table import Table
 from rich.panel import Panel
 
 from .config import load_config, global_config_path
+from .completion import (
+    complete_feature,
+    complete_repo,
+    complete_repo_in_feature,
+)
 from .git import (
     exists_on_path,
     is_git_repo,
@@ -29,6 +34,22 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+
+
+def _pal_version() -> str:
+    try:
+        from importlib.metadata import version  # py>=3.8
+
+        return version("pal")
+    except Exception:
+        return "0.0.0"
+
+
+def _print_version(value: bool) -> None:
+    if not value:
+        return
+    console.print(f"pal {_pal_version()}")
+    raise typer.Exit(code=0)
 
 
 def _detect_editor(preferred: str) -> str:
@@ -63,7 +84,15 @@ def _require_root_repo(cfg, repo: str) -> Path:
 
 
 @app.callback()
-def main():
+def main(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        help="Show version and exit.",
+        callback=_print_version,
+        is_eager=True,
+    ),
+):
     """
     pal creates per-feature multi-repo workspaces using git worktrees.
     It also generates VS Code / Cursor multi-root workspaces per feature.
@@ -215,7 +244,7 @@ def _sync_local_files(cfg, feature: str, repo: str, *, overwrite: bool) -> None:
 @app.command()
 def new(
     feature: str = typer.Argument(..., help="Feature workspace name (folder under worktree_root)."),
-    repos: List[str] = typer.Argument(..., help="One or more repo folder names under root."),
+    repos: List[str] = typer.Argument(..., help="One or more repo folder names under root.", autocompletion=complete_repo),
     root: Path = typer.Option(Path("."), "--root", "-r"),
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
     branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
@@ -244,8 +273,8 @@ def new(
 
 @app.command()
 def add(
-    feature: str = typer.Argument(..., help="Existing feature workspace name."),
-    repos: List[str] = typer.Argument(..., help="One or more repos to add to the feature workspace."),
+    feature: str = typer.Argument(..., help="Existing feature workspace name.", autocompletion=complete_feature),
+    repos: List[str] = typer.Argument(..., help="One or more repos to add to the feature workspace.", autocompletion=complete_repo),
     root: Path = typer.Option(Path("."), "--root", "-r"),
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
     branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
@@ -275,7 +304,7 @@ def add(
 
 @app.command()
 def status(
-    feature: str = typer.Argument(..., help="Feature workspace name."),
+    feature: str = typer.Argument(..., help="Feature workspace name.", autocompletion=complete_feature),
     root: Path = typer.Option(Path("."), "--root", "-r"),
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
     branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
@@ -304,7 +333,7 @@ def status(
 
 @app.command()
 def open(
-    feature: str = typer.Argument(...),
+    feature: str = typer.Argument(..., autocompletion=complete_feature),
     editor: str = typer.Option("", "--editor", help="Force editor command (cursor|code). Auto-detect if empty."),
     root: Path = typer.Option(Path("."), "--root", "-r"),
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
@@ -332,7 +361,7 @@ def open(
 @app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
 def codex(
     ctx: typer.Context,
-    feature: str = typer.Argument(...),
+    feature: str = typer.Argument(..., autocompletion=complete_feature),
     full_auto: Optional[bool] = typer.Option(None, "--full-auto", help="Pass --full-auto to Codex (overrides config)."),
     sandbox: Optional[str] = typer.Option(None, "--sandbox", help="Codex sandbox policy override."),
     approval: Optional[str] = typer.Option(None, "--approval", help="Codex approval policy override."),
@@ -382,7 +411,7 @@ def codex(
 
 @app.command()
 def exec(
-    feature: str = typer.Argument(...),
+    feature: str = typer.Argument(..., autocompletion=complete_feature),
     prompt: str = typer.Argument(..., help="Prompt to run in non-interactive mode."),
     full_auto: Optional[bool] = typer.Option(None, "--full-auto", help="Pass --full-auto to Codex (overrides config)."),
     sandbox: Optional[str] = typer.Option(None, "--sandbox", help="Codex sandbox policy override."),
@@ -428,11 +457,12 @@ def exec(
 
 @app.command()
 def rm(
-    feature: str = typer.Argument(...),
+    feature: str = typer.Argument(..., autocompletion=complete_feature),
     repos: List[str] = typer.Option(
         [],
         "--repo",
         help="Optional subset of repos to remove (repeatable). Omit to remove all.",
+        autocompletion=complete_repo_in_feature,
     ),
     root: Path = typer.Option(Path("."), "--root", "-r"),
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
@@ -450,7 +480,13 @@ def rm(
         targets = sorted([p.name for p in feature_dir.iterdir() if p.is_dir() and is_git_repo(p)])
 
     if not targets:
-        console.print("[yellow]Nothing to remove.[/yellow]")
+        # Allow removing empty/broken feature workspaces too (e.g. no git repos left, or stray dirs only).
+        if not yes:
+            if not typer.confirm(f"No git worktrees found in '{feature}'. Remove the feature folder anyway?"):
+                raise typer.Exit(code=1)
+        import shutil
+        shutil.rmtree(feature_dir, ignore_errors=True)
+        console.print("[green]✓[/green] removed")
         return
 
     table = Table(title=f"Remove worktrees: {feature}", header_style="bold")
@@ -476,16 +512,8 @@ def rm(
     if remaining_repos:
         _refresh_workspace(cfg, feature)
     else:
-        ws_path = feature_dir / f"{feature}.code-workspace"
-        try:
-            if ws_path.exists():
-                ws_path.unlink()
-        except Exception:
-            pass
-        try:
-            feature_dir.rmdir()
-        except Exception:
-            pass
+        import shutil
+        shutil.rmtree(feature_dir, ignore_errors=True)
 
     console.print("[green]✓[/green] removed")
 

@@ -91,3 +91,35 @@ def test_load_config_parses_agent_add_dirs(tmp_path: Path) -> None:
     )
     cfg = load_config(root=tmp_path, cli_overrides={"root": str(tmp_path)})
     assert cfg.agent.add_dirs == ["/tmp/a", "/tmp/b"]
+
+
+def test_rm_removes_empty_feature_dir(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    runner = CliRunner()
+    (tmp_path / "_wt" / "property-assignment").mkdir(parents=True)
+
+    result = runner.invoke(app, ["rm", "property-assignment", "--root", str(tmp_path), "--yes"])
+    assert result.exit_code == 0, result.output
+    assert not (tmp_path / "_wt" / "property-assignment").exists()
+
+
+def test_rm_removes_feature_dir_with_non_repo_dirs(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    runner = CliRunner()
+    feature_dir = tmp_path / "_wt" / "property-assign"
+    (feature_dir / "_wt").mkdir(parents=True)
+
+    result = runner.invoke(app, ["rm", "property-assign", "--root", str(tmp_path), "--yes"])
+    assert result.exit_code == 0, result.output
+    assert not feature_dir.exists()
+
+
+def test_version_flag_prints_version(tmp_path: Path) -> None:
+    from typer.testing import CliRunner
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["--version"])
+    assert result.exit_code == 0, result.output
+    assert result.output.strip().startswith("pal ")

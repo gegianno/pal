@@ -163,6 +163,8 @@ pal --install-completion
 pal --show-completion
 ```
 
+In zsh, after installing, restart your shell (or `exec zsh`) so `pal` completions load.
+
 ### Keep a “global overview” editor window
 
 You can still open your big `projects/` folder in Cursor for global visibility, while also opening
