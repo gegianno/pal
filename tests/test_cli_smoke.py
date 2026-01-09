@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from click.termui import strip_ansi
 from typer.testing import CliRunner
 
 from pal.cli import app
@@ -20,7 +21,7 @@ def test_help_does_not_crash() -> None:
 def test_rm_help_exposes_repo_option() -> None:
     result = runner.invoke(app, ["rm", "--help"])
     assert result.exit_code == 0, result.output
-    assert "--repo" in result.output
+    assert "--repo" in strip_ansi(result.output)
 
 
 def test_codex_forwards_args_to_codex_resume(
