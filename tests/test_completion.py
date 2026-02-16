@@ -4,7 +4,7 @@ from pathlib import Path
 
 import click
 
-from pal.completion import complete_feature, complete_repo, complete_repo_in_feature
+from pal.completion import complete_agent, complete_feature, complete_repo, complete_repo_in_feature
 
 
 def test_complete_feature_lists_feature_dirs(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
@@ -41,3 +41,9 @@ def test_complete_repo_in_feature_lists_only_git_repos(tmp_path: Path, monkeypat
 
     out = complete_repo_in_feature(ctx, [], "")
     assert out == ["repo1"]
+
+
+def test_complete_agent_lists_supported_agents() -> None:
+    ctx = click.Context(click.Command("pal"))
+    out = complete_agent(ctx, [], "cl")
+    assert out == ["claude"]

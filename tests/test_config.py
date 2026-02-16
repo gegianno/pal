@@ -42,6 +42,8 @@ def test_config_init_writes_valid_toml(tmp_path: Path) -> None:
     assert parsed["codex"]["sandbox"] == "workspace-write"
     assert parsed["codex"]["approval"] == "on-request"
     assert parsed["codex"]["full_auto"] is False
+    assert parsed["claude"]["permission_mode"] == "acceptEdits"
+    assert parsed["claude"]["allow_bypass_permissions"] is False
 
 
 def test_load_config_parses_local_files(tmp_path: Path) -> None:
@@ -85,6 +87,27 @@ def test_load_config_parses_agent_add_dirs(tmp_path: Path) -> None:
     )
     cfg = load_config(root=tmp_path, cli_overrides={"root": str(tmp_path)})
     assert cfg.agent.add_dirs == ["/tmp/a", "/tmp/b"]
+
+
+def test_load_config_parses_claude_section(tmp_path: Path) -> None:
+    (tmp_path / ".pal.toml").write_text(
+        (
+            'root = "."\n\n'
+            "[claude]\n"
+            'permission_mode = "plan"\n'
+            'model = "sonnet"\n'
+            'add_dirs = ["/tmp/a"]\n'
+            'extra_args = ["--foo", "bar"]\n'
+            "allow_bypass_permissions = true\n"
+        ),
+        encoding="utf-8",
+    )
+    cfg = load_config(root=tmp_path, cli_overrides={"root": str(tmp_path)})
+    assert cfg.claude.permission_mode == "plan"
+    assert cfg.claude.model == "sonnet"
+    assert cfg.claude.add_dirs == ["/tmp/a"]
+    assert cfg.claude.extra_args == ["--foo", "bar"]
+    assert cfg.claude.allow_bypass_permissions is True
 
 
 def test_rm_removes_empty_feature_dir(tmp_path: Path) -> None:

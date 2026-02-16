@@ -8,6 +8,8 @@ import click
 from .config import load_config
 from .git import is_git_repo, list_child_repos
 
+AGENTS = ["claude", "codex"]
+
 
 def _cfg_from_ctx(ctx: click.Context):
     params: dict[str, Any] = dict(getattr(ctx, "params", {}) or {})
@@ -63,5 +65,12 @@ def complete_repo_in_feature(ctx: click.Context, args: list[str], incomplete: st
             return []
         repos = [p.name for p in feature_dir.iterdir() if p.is_dir() and is_git_repo(p)]
         return sorted([r for r in repos if _starts_with(r, incomplete)])
+    except Exception:
+        return []
+
+
+def complete_agent(ctx: click.Context, args: list[str], incomplete: str):  # noqa: ARG001
+    try:
+        return sorted([a for a in AGENTS if _starts_with(a, incomplete)])
     except Exception:
         return []

@@ -24,7 +24,7 @@ def test_rm_help_exposes_repo_option() -> None:
     assert "--repo" in strip_ansi(result.output)
 
 
-def test_codex_forwards_args_to_codex_resume(
+def test_run_codex_forwards_args_to_codex_resume(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     calls: list[list[str]] = []
@@ -37,15 +37,16 @@ def test_codex_forwards_args_to_codex_resume(
     # Patch the subprocess used by pal.codex.run_interactive
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    # Create feature workspace dir so `pal codex` passes validation.
+    # Create feature workspace dir so `pal run ... codex` passes validation.
     root = tmp_path / "projects"
     (root / "_wt" / "feat-auth").mkdir(parents=True)
 
     result = runner.invoke(
         app,
         [
-            "codex",
+            "run",
             "feat-auth",
+            "codex",
             "--root",
             str(root),
             "resume",
@@ -55,3 +56,24 @@ def test_codex_forwards_args_to_codex_resume(
     assert result.exit_code == 0, result.output
     assert calls, "expected codex subprocess.run to be invoked"
     assert "resume" in calls[0]
+
+
+def test_plan_codex_injects_plan_slash_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, check=True, **_kwargs):  # noqa: ANN001
+        assert check is True
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    root = tmp_path / "projects"
+    (root / "_wt" / "feat-auth").mkdir(parents=True)
+
+    result = runner.invoke(app, ["plan", "feat-auth", "codex", "--root", str(root), "Review API"])
+    assert result.exit_code == 0, result.output
+    assert calls, "expected codex subprocess.run to be invoked"
+    assert "/plan Review API" in calls[0]

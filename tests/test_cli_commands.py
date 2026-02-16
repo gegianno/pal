@@ -87,19 +87,250 @@ def test_new_creates_workspace_file(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert (root / "_wt" / feature / f"{feature}.code-workspace").exists()
 
 
-def test_exec_forwards_prompt_to_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[Path, str]] = []
+def test_run_codex_forwards_args_to_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[Path, list[str]]] = []
 
-    def fake_run_exec(workspace_dir: Path, prompt: str, _cfg):  # noqa: ANN001
-        calls.append((workspace_dir, prompt))
+    def fake_run_codex(workspace_dir: Path, _cfg, extra_args=None):  # noqa: ANN001
+        calls.append((workspace_dir, list(extra_args or [])))
 
     root = tmp_path / "projects"
     feature = "email"
     (root / "_wt" / feature).mkdir(parents=True)
 
-    monkeypatch.setattr("pal.cli.run_exec", fake_run_exec)
+    monkeypatch.setattr("pal.cli.run_codex_interactive", fake_run_codex)
 
-    prompt = "Hello world"
-    result = runner.invoke(app, ["exec", feature, prompt, "--root", str(root)])
+    result = runner.invoke(
+        app,
+        ["run", feature, "codex", "--root", str(root), "resume", "019b947b-ff0f-7ff3-8a49"],
+    )
     assert result.exit_code == 0, result.output
-    assert calls == [(root / "_wt" / feature, prompt)]
+    assert calls == [(root / "_wt" / feature, ["resume", "019b947b-ff0f-7ff3-8a49"])]
+
+
+def test_plan_claude_injects_permission_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[Path, list[str]]] = []
+
+    def fake_run_claude(workspace_dir: Path, *, add_dirs=None, extra_args=None):  # noqa: ANN001
+        calls.append((workspace_dir, list(extra_args or [])))
+
+    root = tmp_path / "projects"
+    feature = "email"
+    (root / "_wt" / feature).mkdir(parents=True)
+
+    monkeypatch.setattr("pal.cli.run_claude_interactive", fake_run_claude)
+
+    result = runner.invoke(app, ["plan", feature, "claude", "--root", str(root), "Audit the repo"])
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        (root / "_wt" / feature, ["--permission-mode", "plan", "Audit the repo"]),
+    ]
+
+
+def test_implement_claude_respects_explicit_permission_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[tuple[Path, list[str]]] = []
+
+    def fake_run_claude(workspace_dir: Path, *, add_dirs=None, extra_args=None):  # noqa: ANN001
+        calls.append((workspace_dir, list(extra_args or [])))
+
+    root = tmp_path / "projects"
+    feature = "email"
+    (root / "_wt" / feature).mkdir(parents=True)
+
+    monkeypatch.setattr("pal.cli.run_claude_interactive", fake_run_claude)
+
+    result = runner.invoke(
+        app,
+        [
+            "implement",
+            feature,
+            "claude",
+            "--root",
+            str(root),
+            "--permission-mode",
+            "plan",
+            "Dry run",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert calls == [(root / "_wt" / feature, ["--permission-mode", "plan", "Dry run"])]
+
+
+def test_run_claude_applies_agent_add_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[list[str]] = []
+
+    def fake_run_claude(workspace_dir: Path, *, add_dirs=None, extra_args=None):  # noqa: ANN001
+        assert workspace_dir == root / "_wt" / feature
+        seen.append(list(add_dirs or []))
+
+    root = tmp_path / "projects"
+    feature = "email"
+    (root / "_wt" / feature).mkdir(parents=True)
+    (root / ".pal.toml").write_text('[agent]\nadd_dirs = ["~/.npm"]\n', encoding="utf-8")
+
+    monkeypatch.setattr("pal.cli.run_claude_interactive", fake_run_claude)
+
+    result = runner.invoke(app, ["run", feature, "claude", "--root", str(root)])
+    assert result.exit_code == 0, result.output
+    assert seen == [["~/.npm"]]
+
+
+def test_run_claude_injects_default_permission_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run_claude(workspace_dir: Path, *, add_dirs=None, extra_args=None):  # noqa: ANN001
+        assert workspace_dir == root / "_wt" / feature
+        assert add_dirs == []
+        calls.append(list(extra_args or []))
+
+    root = tmp_path / "projects"
+    feature = "email"
+    (root / "_wt" / feature).mkdir(parents=True)
+
+    monkeypatch.setattr("pal.cli.run_claude_interactive", fake_run_claude)
+
+    result = runner.invoke(app, ["run", feature, "claude", "--root", str(root), "Continue"])
+    assert result.exit_code == 0, result.output
+    assert calls == [["--permission-mode", "acceptEdits", "Continue"]]
+
+
+def test_plan_claude_uses_internal_plan_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run_claude(workspace_dir: Path, *, add_dirs=None, extra_args=None):  # noqa: ANN001
+        assert workspace_dir == root / "_wt" / feature
+        assert add_dirs == []
+        calls.append(list(extra_args or []))
+
+    root = tmp_path / "projects"
+    feature = "email"
+    (root / "_wt" / feature).mkdir(parents=True)
+    (root / ".pal.toml").write_text(
+        '[claude]\npermission_mode = "acceptEdits"\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("pal.cli.run_claude_interactive", fake_run_claude)
+
+    result = runner.invoke(app, ["plan", feature, "claude", "--root", str(root), "Plan this"])
+    assert result.exit_code == 0, result.output
+    assert calls == [["--permission-mode", "plan", "Plan this"]]
+
+
+def test_implement_claude_uses_configured_permission_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run_claude(workspace_dir: Path, *, add_dirs=None, extra_args=None):  # noqa: ANN001
+        assert workspace_dir == root / "_wt" / feature
+        assert add_dirs == []
+        calls.append(list(extra_args or []))
+
+    root = tmp_path / "projects"
+    feature = "email"
+    (root / "_wt" / feature).mkdir(parents=True)
+    (root / ".pal.toml").write_text(
+        '[claude]\npermission_mode = "plan"\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("pal.cli.run_claude_interactive", fake_run_claude)
+
+    result = runner.invoke(app, ["implement", feature, "claude", "--root", str(root), "Ship it"])
+    assert result.exit_code == 0, result.output
+    assert calls == [["--permission-mode", "plan", "Ship it"]]
+
+
+def test_run_claude_merges_agent_and_claude_add_dirs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen: list[list[str]] = []
+
+    def fake_run_claude(workspace_dir: Path, *, add_dirs=None, extra_args=None):  # noqa: ANN001
+        assert workspace_dir == root / "_wt" / feature
+        seen.append(list(add_dirs or []))
+
+    root = tmp_path / "projects"
+    feature = "email"
+    (root / "_wt" / feature).mkdir(parents=True)
+    (root / ".pal.toml").write_text(
+        '[agent]\nadd_dirs = ["~/.npm"]\n\n[claude]\nadd_dirs = ["~/.cache/claude"]\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("pal.cli.run_claude_interactive", fake_run_claude)
+
+    result = runner.invoke(app, ["run", feature, "claude", "--root", str(root)])
+    assert result.exit_code == 0, result.output
+    assert seen == [["~/.npm", "~/.cache/claude"]]
+
+
+def test_run_claude_blocks_bypass_permissions_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fake_run_claude(workspace_dir: Path, *, add_dirs=None, extra_args=None):  # noqa: ANN001
+        raise AssertionError("runner should not be called when config blocks bypass permissions")
+
+    root = tmp_path / "projects"
+    feature = "email"
+    (root / "_wt" / feature).mkdir(parents=True)
+
+    monkeypatch.setattr("pal.cli.run_claude_interactive", fake_run_claude)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            feature,
+            "claude",
+            "--root",
+            str(root),
+            "--permission-mode",
+            "bypassPermissions",
+        ],
+    )
+    assert result.exit_code != 0, result.output
+    assert "allow_bypass_permissions=false" in result.output
+
+
+def test_run_claude_allows_bypass_when_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run_claude(workspace_dir: Path, *, add_dirs=None, extra_args=None):  # noqa: ANN001
+        assert workspace_dir == root / "_wt" / feature
+        calls.append(list(extra_args or []))
+
+    root = tmp_path / "projects"
+    feature = "email"
+    (root / "_wt" / feature).mkdir(parents=True)
+    (root / ".pal.toml").write_text(
+        "[claude]\nallow_bypass_permissions = true\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("pal.cli.run_claude_interactive", fake_run_claude)
+
+    result = runner.invoke(
+        app,
+        [
+            "run",
+            feature,
+            "claude",
+            "--root",
+            str(root),
+            "--permission-mode",
+            "bypassPermissions",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert calls == [["--permission-mode", "bypassPermissions"]]

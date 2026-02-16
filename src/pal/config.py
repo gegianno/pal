@@ -24,9 +24,20 @@ class CodexConfig:
 
 @dataclass
 class AgentConfig:
-    # Extra writable roots that apply to any agent runner (Codex today; other agents later).
+    # Extra writable roots that apply to any agent runner (Codex, Claude Code, ...).
     # Each runner can map these to its equivalent flags/settings.
     add_dirs: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ClaudeConfig:
+    # Closest parity to Codex on-request style behavior for interactive work.
+    permission_mode: str = "acceptEdits"
+    model: str = ""
+    add_dirs: list[str] = field(default_factory=list)
+    extra_args: list[str] = field(default_factory=list)
+    # Safety guardrail: if false, reject bypass-permission flags/modes.
+    allow_bypass_permissions: bool = False
 
 
 @dataclass
@@ -56,6 +67,7 @@ class PalConfig:
     editor: str = ""  # cursor | code | "" (auto)
     agent: AgentConfig = field(default_factory=AgentConfig)
     codex: CodexConfig = field(default_factory=CodexConfig)
+    claude: ClaudeConfig = field(default_factory=ClaudeConfig)
     local_files: LocalFilesConfig = field(default_factory=LocalFilesConfig)
 
     @property
@@ -170,6 +182,25 @@ def _apply_dict(cfg: PalConfig, d: dict[str, Any]) -> None:
                 cfg.codex.add_dirs = [str(x) for x in v]
             elif isinstance(v, str):
                 cfg.codex.add_dirs = [v]
+
+    claude = d.get("claude")
+    if isinstance(claude, dict):
+        if "permission_mode" in claude:
+            cfg.claude.permission_mode = str(claude["permission_mode"])
+        if "model" in claude:
+            cfg.claude.model = str(claude["model"])
+        if "allow_bypass_permissions" in claude:
+            cfg.claude.allow_bypass_permissions = bool(claude["allow_bypass_permissions"])
+        if "extra_args" in claude and isinstance(claude["extra_args"], list):
+            cfg.claude.extra_args = [str(x) for x in claude["extra_args"]]
+        if "add_dirs" in claude and isinstance(claude["add_dirs"], list):
+            cfg.claude.add_dirs = [str(x) for x in claude["add_dirs"]]
+        elif "add_dir" in claude:
+            v = claude["add_dir"]
+            if isinstance(v, list):
+                cfg.claude.add_dirs = [str(x) for x in v]
+            elif isinstance(v, str):
+                cfg.claude.add_dirs = [v]
 
     local_files = d.get("local_files")
     if isinstance(local_files, dict):

@@ -1,7 +1,7 @@
 [project]
 name = "pal"
-version = "0.1.0"
-description = "Pal: multi-repo feature workspaces using git worktrees (Codex-friendly)."
+version = "0.2.0"
+description = "Pal: multi-repo feature workspaces using git worktrees (agent-friendly)."
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}

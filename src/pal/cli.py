@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Optional, List
 
@@ -10,6 +11,7 @@ from rich.panel import Panel
 
 from .config import load_config, global_config_path
 from .completion import (
+    complete_agent,
     complete_feature,
     complete_repo,
     complete_repo_in_feature,
@@ -25,15 +27,35 @@ from .git import (
     git_porcelain,
 )
 from .vscode import write_code_workspace
-from .codex import run_interactive, run_exec
+from .claude import run_interactive as run_claude_interactive
+from .codex import run_interactive as run_codex_interactive
 from .local_files import copy_local_files, resolve_local_file_paths
 
 app = typer.Typer(
     add_completion=True,
-    help="Pal: multi-repo feature workspaces using git worktrees (Codex-friendly).",
+    help="Pal: multi-repo feature workspaces using git worktrees (agent-friendly).",
     no_args_is_help=True,
 )
 console = Console()
+AGENTS = ("claude", "codex")
+CODEX_BLOCKED_PLAN_ARGS = {
+    "app-server",
+    "cloud",
+    "completion",
+    "debug",
+    "exec",
+    "features",
+    "fork",
+    "help",
+    "login",
+    "logout",
+    "mcp",
+    "proto",
+    "resume",
+    "r",
+    "e",
+    "sandbox",
+}
 
 
 def _pal_version() -> str:
@@ -113,6 +135,152 @@ def _cfg_from_ctx(
     return load_config(root=root, cli_overrides=overrides)
 
 
+def _effective_codex_config(cfg):
+    codex_cfg = deepcopy(cfg.codex)
+    if cfg.agent.add_dirs:
+        merged = [*cfg.agent.add_dirs, *codex_cfg.add_dirs]
+        codex_cfg.add_dirs = list(dict.fromkeys(merged))
+    return codex_cfg
+
+
+def _resolve_agent(agent: str) -> str:
+    normalized = agent.strip().lower()
+    if normalized not in AGENTS:
+        raise typer.BadParameter(f"Unknown agent '{agent}'. Supported agents: {', '.join(AGENTS)}")
+    return normalized
+
+
+def _has_flag(args: list[str], name: str) -> bool:
+    return any(arg == name or arg.startswith(f"{name}=") for arg in args)
+
+
+def _flag_value(args: list[str], name: str) -> Optional[str]:
+    for idx, arg in enumerate(args):
+        if arg == name:
+            return args[idx + 1] if idx + 1 < len(args) else None
+        if arg.startswith(f"{name}="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+def _remove_flag(args: list[str], name: str) -> list[str]:
+    out: list[str] = []
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == name:
+            i += 2
+            continue
+        if arg.startswith(f"{name}="):
+            i += 1
+            continue
+        out.append(arg)
+        i += 1
+    return out
+
+
+def _effective_claude_add_dirs(cfg) -> list[str]:
+    merged = [*cfg.agent.add_dirs, *cfg.claude.add_dirs]
+    return list(dict.fromkeys(merged))
+
+
+def _default_claude_mode_for_intent(cfg, intent: str) -> str:
+    if intent == "plan":
+        return "plan"
+    return cfg.claude.permission_mode.strip()
+
+
+def _is_bypass_permission_mode(mode: str) -> bool:
+    normalized = mode.strip().lower()
+    return normalized in {"bypasspermissions", "bypass_permissions", "bypass-permissions"}
+
+
+def _validate_claude_permissions(cfg, args: list[str]) -> None:
+    if cfg.claude.allow_bypass_permissions:
+        return
+    if _has_flag(args, "--dangerously-skip-permissions"):
+        raise typer.BadParameter(
+            "Bypass permissions are disabled by config ([claude].allow_bypass_permissions=false)."
+        )
+    mode = _flag_value(args, "--permission-mode")
+    if mode and _is_bypass_permission_mode(mode):
+        raise typer.BadParameter(
+            "Bypass permissions mode is disabled by config "
+            "([claude].allow_bypass_permissions=false)."
+        )
+
+
+def _effective_claude_args(cfg, intent: str, raw_args: list[str]) -> list[str]:
+    args = list(raw_args)
+    if not _has_flag(args, "--permission-mode"):
+        mode = _default_claude_mode_for_intent(cfg, intent)
+        if mode:
+            args = ["--permission-mode", mode, *args]
+    if cfg.claude.model and not _has_flag(args, "--model"):
+        args = ["--model", cfg.claude.model, *args]
+    if cfg.claude.extra_args:
+        args = [*cfg.claude.extra_args, *args]
+    _validate_claude_permissions(cfg, args)
+    return args
+
+
+def _codex_plan_args(args: list[str]) -> list[str]:
+    if not args:
+        return ["/plan"]
+    if any(token.startswith("-") for token in args):
+        raise typer.BadParameter(
+            "pal plan <feature> codex accepts only a planning prompt. "
+            "Use `pal run <feature> codex ...` for raw Codex flags."
+        )
+    if args[0].lower() in CODEX_BLOCKED_PLAN_ARGS:
+        raise typer.BadParameter(
+            "pal plan <feature> codex is interactive planning only. "
+            "Use `pal run <feature> codex ...` for Codex subcommands."
+        )
+    return [f"/plan {' '.join(args)}"]
+
+
+def _run_agent(feature_dir: Path, cfg, agent: str, intent: str, raw_args: list[str]) -> None:
+    if agent == "codex":
+        codex_cfg = _effective_codex_config(cfg)
+        codex_args = raw_args
+        if intent == "plan":
+            codex_args = _codex_plan_args(raw_args)
+        console.print(
+            Panel.fit(
+                f"workspace: {feature_dir}\n"
+                f"agent: codex\n"
+                f"intent: {intent}\n"
+                f"sandbox={codex_cfg.sandbox} approval={codex_cfg.approval} full_auto={codex_cfg.full_auto}",
+                title="Launching Agent",
+            )
+        )
+        run_codex_interactive(feature_dir, codex_cfg, extra_args=codex_args or None)
+        return
+
+    claude_args = _effective_claude_args(cfg, intent, raw_args)
+    claude_add_dirs = _effective_claude_add_dirs(cfg)
+    claude_mode = _flag_value(claude_args, "--permission-mode") or "(default)"
+    claude_model = _flag_value(claude_args, "--model") or "(default)"
+
+    console.print(
+        Panel.fit(
+            f"workspace: {feature_dir}\n"
+            f"agent: claude\n"
+            f"intent: {intent}\n"
+            f"permission_mode={claude_mode}\n"
+            f"model={claude_model}\n"
+            f"add_dirs={claude_add_dirs}",
+            title="Launching Agent",
+        )
+    )
+    run_claude_interactive(
+        feature_dir,
+        add_dirs=claude_add_dirs,
+        extra_args=claude_args or None,
+    )
+
+
 @app.command()
 def doctor(
     root: Path = typer.Option(Path("."), "--root", "-r"),
@@ -124,15 +292,20 @@ def doctor(
     ok = True
 
     def chk(exe: str, label: str):
-        nonlocal ok
         if exists_on_path(exe):
             console.print(f"[green]✓[/green] {label}: {exe}")
+            return True
         else:
-            ok = False
             console.print(f"[red]✗[/red] {label}: {exe} (not found in PATH)")
+            return False
 
-    chk("git", "Git")
-    chk("codex", "Codex CLI")
+    if not chk("git", "Git"):
+        ok = False
+    has_codex = chk("codex", "Codex CLI")
+    has_claude = chk("claude", "Claude Code CLI")
+    if not has_codex and not has_claude:
+        ok = False
+        console.print("[red]At least one agent CLI is required: codex or claude.[/red]")
     if exists_on_path("cursor") or exists_on_path("code"):
         chk("cursor" if exists_on_path("cursor") else "code", "Editor (auto-detected)")
     else:
@@ -318,7 +491,7 @@ def add(
     ws_path = _refresh_workspace(cfg, feature)
     console.print(f"[green]✓[/green] updated workspace: {ws_path}")
     console.print(
-        "[yellow]Tip:[/yellow] Restart an interactive Codex session if it's already running."
+        "[yellow]Tip:[/yellow] Restart any interactive agent session if it's already running."
     )
 
 
@@ -385,113 +558,85 @@ def open(
     console.print("[green]✓[/green] opened")
 
 
+def _agent_entrypoint(
+    ctx: typer.Context,
+    *,
+    feature: str,
+    agent: str,
+    root: Path,
+    worktree_root: Optional[Path],
+    branch_prefix: Optional[str],
+    intent: str,
+):
+    cfg = _cfg_from_ctx(root, worktree_root, branch_prefix)
+    feature_dir = _feature_dir(cfg, feature)
+    if not feature_dir.exists():
+        raise typer.BadParameter(f"Feature workspace '{feature}' not found at {feature_dir}")
+    resolved_agent = _resolve_agent(agent)
+    _run_agent(feature_dir, cfg, resolved_agent, intent, list(ctx.args))
+
+
 @app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
-def codex(
+def run(
     ctx: typer.Context,
     feature: str = typer.Argument(..., autocompletion=complete_feature),
-    full_auto: Optional[bool] = typer.Option(
-        None, "--full-auto", help="Pass --full-auto to Codex (overrides config)."
-    ),
-    sandbox: Optional[str] = typer.Option(None, "--sandbox", help="Codex sandbox policy override."),
-    approval: Optional[str] = typer.Option(
-        None, "--approval", help="Codex approval policy override."
-    ),
-    add_dir: List[str] = typer.Option(
-        [],
-        "--add-dir",
-        help="Additional writable dir(s) for Codex (repeatable). Useful for caches like ~/.npm.",
-    ),
+    agent: str = typer.Argument(..., autocompletion=complete_agent),
     root: Path = typer.Option(Path("."), "--root", "-r"),
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
     branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
 ):
-    """
-    Run interactive Codex in the feature workspace root, *scoped to this directory*.
-
-    Default behavior does not touch your global ~/.codex/config.toml; it uses per-run flags.
-    """
-    cfg = _cfg_from_ctx(root, worktree_root, branch_prefix)
-    feature_dir = _feature_dir(cfg, feature)
-    if not feature_dir.exists():
-        raise typer.BadParameter(f"Feature workspace '{feature}' not found at {feature_dir}")
-
-    # per-run overrides
-    if full_auto is not None:
-        cfg.codex.full_auto = full_auto
-    if sandbox is not None:
-        cfg.codex.sandbox = sandbox
-    if approval is not None:
-        cfg.codex.approval = approval
-    if add_dir:
-        cfg.codex.add_dirs.extend([str(x) for x in add_dir])
-
-    # Agent-level writable roots apply to Codex too (mapped to Codex `--add-dir` flags).
-    if cfg.agent.add_dirs:
-        merged = [*cfg.agent.add_dirs, *cfg.codex.add_dirs]
-        # preserve order while de-duping
-        cfg.codex.add_dirs = list(dict.fromkeys(merged))
-
-    console.print(
-        Panel.fit(
-            f"workspace: {feature_dir}\n"
-            f"codex: sandbox={cfg.codex.sandbox} approval={cfg.codex.approval} full_auto={cfg.codex.full_auto}",
-            title="Launching Codex",
-        )
+    """Run an agent CLI in a feature workspace."""
+    _agent_entrypoint(
+        ctx,
+        feature=feature,
+        agent=agent,
+        root=root,
+        worktree_root=worktree_root,
+        branch_prefix=branch_prefix,
+        intent="run",
     )
-    extra = list(ctx.args)
-    run_interactive(feature_dir, cfg.codex, extra_args=extra if extra else None)
 
 
-@app.command()
-def exec(
+@app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def plan(
+    ctx: typer.Context,
     feature: str = typer.Argument(..., autocompletion=complete_feature),
-    prompt: str = typer.Argument(..., help="Prompt to run in non-interactive mode."),
-    full_auto: Optional[bool] = typer.Option(
-        None, "--full-auto", help="Pass --full-auto to Codex (overrides config)."
-    ),
-    sandbox: Optional[str] = typer.Option(None, "--sandbox", help="Codex sandbox policy override."),
-    approval: Optional[str] = typer.Option(
-        None, "--approval", help="Codex approval policy override."
-    ),
-    add_dir: List[str] = typer.Option(
-        [],
-        "--add-dir",
-        help="Additional writable dir(s) for Codex (repeatable). Useful for caches like ~/.npm.",
-    ),
+    agent: str = typer.Argument(..., autocompletion=complete_agent),
     root: Path = typer.Option(Path("."), "--root", "-r"),
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
     branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
 ):
-    """Run non-interactive 'codex exec' in the feature workspace."""
-    cfg = _cfg_from_ctx(root, worktree_root, branch_prefix)
-    feature_dir = _feature_dir(cfg, feature)
-    if not feature_dir.exists():
-        raise typer.BadParameter(f"Feature workspace '{feature}' not found at {feature_dir}")
-
-    if full_auto is not None:
-        cfg.codex.full_auto = full_auto
-    if sandbox is not None:
-        cfg.codex.sandbox = sandbox
-    if approval is not None:
-        cfg.codex.approval = approval
-    if add_dir:
-        cfg.codex.add_dirs.extend([str(x) for x in add_dir])
-
-    # Agent-level writable roots apply to Codex too (mapped to Codex `--add-dir` flags).
-    if cfg.agent.add_dirs:
-        merged = [*cfg.agent.add_dirs, *cfg.codex.add_dirs]
-        # preserve order while de-duping
-        cfg.codex.add_dirs = list(dict.fromkeys(merged))
-
-    console.print(
-        Panel.fit(
-            f"workspace: {feature_dir}\n"
-            f"codex: sandbox={cfg.codex.sandbox} approval={cfg.codex.approval} full_auto={cfg.codex.full_auto}\n"
-            f"prompt: {prompt}",
-            title="Running Codex exec",
-        )
+    """Run an agent in planning mode."""
+    _agent_entrypoint(
+        ctx,
+        feature=feature,
+        agent=agent,
+        root=root,
+        worktree_root=worktree_root,
+        branch_prefix=branch_prefix,
+        intent="plan",
     )
-    run_exec(feature_dir, prompt, cfg.codex)
+
+
+@app.command(context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def implement(
+    ctx: typer.Context,
+    feature: str = typer.Argument(..., autocompletion=complete_feature),
+    agent: str = typer.Argument(..., autocompletion=complete_agent),
+    root: Path = typer.Option(Path("."), "--root", "-r"),
+    worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
+    branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
+):
+    """Run an agent in implementation mode."""
+    _agent_entrypoint(
+        ctx,
+        feature=feature,
+        agent=agent,
+        root=root,
+        worktree_root=worktree_root,
+        branch_prefix=branch_prefix,
+        intent="implement",
+    )
 
 
 @app.command()
@@ -590,7 +735,15 @@ def config_init(
         'approval = "on-request"\n'
         "full_auto = false\n"
         "\n"
+        "[claude]\n"
+        'permission_mode = "acceptEdits"\n'
+        '# model = "sonnet"\n'
+        "# add_dirs = []\n"
+        "# extra_args = []\n"
+        "allow_bypass_permissions = false\n"
+        "\n"
         "[agent]\n"
+        "# Shared writable roots for all agent CLIs (Codex, Claude Code).\n"
         '# add_dirs = ["~/.npm", "~/.cache/prisma"]\n'
         "\n"
         "[local_files]\n"
@@ -628,6 +781,11 @@ def config_show(
             f"agent: add_dirs={cfg.agent.add_dirs}\n"
             f"codex: sandbox={cfg.codex.sandbox} approval={cfg.codex.approval} full_auto={cfg.codex.full_auto}\n"
             f"codex: add_dirs={cfg.codex.add_dirs}\n"
+            f"claude: permission_mode={cfg.claude.permission_mode}\n"
+            f"claude: model={cfg.claude.model or '(default)'} allow_bypass_permissions={cfg.claude.allow_bypass_permissions}\n"
+            f"claude: add_dirs={cfg.claude.add_dirs}\n"
+            f"claude: extra_args={cfg.claude.extra_args}\n"
+            "agents supported: codex, claude\n"
             f"global config: {global_config_path()}\n"
             f"local config: {cfg.local_config_path}",
             title="pal config",

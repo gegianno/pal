@@ -18,10 +18,8 @@ def _normalize_add_dir(workspace_dir: Path, raw: str) -> str:
 
 def codex_cmd(
     workspace_dir: Path,
-    prompt: Optional[str] = None,
     *,
     extra_args: Optional[list[str]] = None,
-    non_interactive: bool = False,
     codex: CodexConfig,
 ) -> list[str]:
     """
@@ -50,16 +48,6 @@ def codex_cmd(
 
     if extra_args:
         cmd += extra_args
-    else:
-        if non_interactive:
-            cmd += ["exec"]
-            # For exec mode, prompt is required
-            if prompt is None:
-                raise ValueError("prompt is required for exec")
-            cmd.append(prompt)
-        else:
-            if prompt:
-                cmd.append(prompt)
     return cmd
 
 
@@ -67,12 +55,6 @@ def run_interactive(
     workspace_dir: Path, codex_cfg: CodexConfig, *, extra_args: Optional[list[str]] = None
 ) -> None:
     subprocess.run(
-        codex_cmd(workspace_dir, non_interactive=False, codex=codex_cfg, extra_args=extra_args),
+        codex_cmd(workspace_dir, codex=codex_cfg, extra_args=extra_args),
         check=True,
-    )
-
-
-def run_exec(workspace_dir: Path, prompt: str, codex_cfg: CodexConfig) -> None:
-    subprocess.run(
-        codex_cmd(workspace_dir, prompt, non_interactive=True, codex=codex_cfg), check=True
     )

@@ -9,9 +9,8 @@ from pal.config import CodexConfig
 def test_codex_cmd_full_auto_is_flag() -> None:
     cmd = codex_cmd(
         Path("."),
-        prompt="hi",
-        non_interactive=True,
         codex=CodexConfig(full_auto=True),
+        extra_args=["status"],
     )
     assert "--full-auto" in cmd
     assert "true" not in cmd
@@ -30,9 +29,8 @@ def test_codex_cmd_allows_extra_args_passthrough() -> None:
 def test_codex_cmd_add_dirs_adds_add_dir_flags() -> None:
     cmd = codex_cmd(
         Path("/workspace"),
-        prompt="hi",
-        non_interactive=True,
         codex=CodexConfig(add_dirs=["/tmp/a", "/tmp/b"]),
+        extra_args=["status"],
     )
     assert cmd[:3] == ["codex", "--cd", "/workspace"]
     assert cmd.count("--add-dir") == 2

@@ -1,7 +1,7 @@
 # pal — Feature workspaces for multi-repo git worktrees
 
 `pal` helps you create **feature-scoped “sandboxes”** across multiple repos using **Git worktrees**.
-It’s designed for running **multiple Codex instances locally** without stepping on each other.
+It’s designed for running **multiple coding-agent sessions locally** without stepping on each other.
 
 It also generates a **VS Code / Cursor multi-root workspace** per feature so you can review changes easily.
 
@@ -53,12 +53,26 @@ pal repos
 pal new feat-auth repo1 repo3
 pal open feat-auth       # opens a multi-root workspace in Cursor/VS Code (if detected)
 
-pal codex feat-auth      # interactive Codex, write-limited to _wt/feat-auth
-pal exec feat-auth "Implement X and run tests"
+pal run feat-auth codex                # interactive Codex
+pal run feat-auth claude               # interactive Claude Code
+pal plan feat-auth codex "Plan this feature"
+pal implement feat-auth claude "Implement X and run tests"
 
-# You can also forward Codex subcommands, e.g. resuming a session:
-pal codex feat-auth resume 019b947b-ff0f-7ff3-8a49-4723ee751f20
+# You can also forward agent CLI subcommands/options directly:
+pal run feat-auth codex resume 019b947b-ff0f-7ff3-8a49-4723ee751f20
 ```
+
+Intent behavior:
+
+- `pal run`: forwards agent CLI args, then applies agent defaults from config.
+- `pal plan`:
+  - `claude`: injects `--permission-mode plan` unless already set.
+  - `codex`: sends `/plan` as the initial prompt (accepts prompt text, not raw Codex flags).
+- `pal implement`:
+  - `claude`: injects `[claude].permission_mode` unless already set.
+  - `codex`: same runtime behavior as `run` (Codex has no dedicated plan permission mode flag).
+
+`pal run`/`plan`/`implement` forward extra args directly to the agent CLI, so no `--` separator is required.
 
 If later you realize you need another repo:
 
@@ -76,15 +90,17 @@ pal rm feat-auth --repo repo1 --repo repo3
 
 ---
 
-## Codex safety defaults (important)
+## Agent defaults (important)
 
-When you run Codex via `pal codex` / `pal exec`, `pal` always launches it with:
+When you run Codex via `pal run ... codex` (or `pal plan` / `pal implement`), `pal` launches it with:
 
 - `--cd <feature_workspace_dir>` to set the workspace root
 - `--sandbox workspace-write` to restrict writes to that workspace directory
 
 These are **per-invocation flags**, so your global `~/.codex/config.toml` defaults remain unchanged.
-See Codex CLI flags (`--cd`, `--sandbox`, `--full-auto`) in the official reference.
+For Claude Code, `pal` launches inside the feature workspace directory and forwards shared writable roots
+from `[agent].add_dirs` and `[claude].add_dirs` as repeated `--add-dir` flags.
+Claude defaults can be configured via `[claude]` (`permission_mode`, model, extra args, bypass guardrail).
 
 ---
 
@@ -130,10 +146,18 @@ sandbox = "workspace-write"   # read-only | workspace-write | danger-full-access
 approval = "on-request"       # untrusted | on-failure | on-request | never
 full_auto = false             # if true, passes --full-auto
 
+[claude]
+permission_mode = "acceptEdits"            # default for `pal run` and `pal implement` with claude
+# `pal plan ... claude` internally defaults to --permission-mode plan.
+model = "sonnet"                           # optional; omit to use Claude CLI default
+add_dirs = ["~/.claude"]                   # optional claude-specific writable roots
+extra_args = []                            # optional args prepended to every claude invocation
+allow_bypass_permissions = false           # blocks bypass permission flags/modes when false
+
 [agent]
-# Optional extra writable roots that apply to agent runners (Codex today).
+# Optional extra writable roots that apply to all agent runners (Codex, Claude Code).
 # Useful when tools need to write caches under your home directory (e.g. ~/.npm, ~/.cache/prisma).
-# pal forwards these to Codex as repeated `--add-dir` flags.
+# pal forwards these as repeated `--add-dir` flags.
 add_dirs = ["~/.npm", "~/.cache/prisma"]
 
 [local_files]
@@ -183,8 +207,9 @@ pal add <feature> <repo...>
 pal ls
 pal status <feature>
 pal open <feature>
-pal codex <feature>
-pal exec <feature> "<prompt>"
+pal run <feature> <agent> [agent args...]
+pal plan <feature> <agent> [agent args...]
+pal implement <feature> <agent> [agent args...]
 pal rm <feature> [--repo repo...]
 pal config init
 pal config show
