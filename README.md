@@ -52,6 +52,7 @@ pal repos
 
 pal new feat-auth repo1 repo3
 pal open feat-auth       # opens a multi-root workspace in Cursor/VS Code (if detected)
+pal rename feat-auth feat-auth-v2
 
 pal run feat-auth codex                # interactive Codex
 pal run feat-auth claude               # interactive Claude Code
@@ -87,6 +88,11 @@ pal rm feat-auth         # removes all worktrees under _wt/feat-auth
 # or remove a subset:
 pal rm feat-auth --repo repo1 --repo repo3
 ```
+
+Terminal tabs:
+
+- When launching an agent, `pal` sets the terminal title to `pal <feature> (<agent>)`
+  when the terminal supports OSC titles.
 
 ---
 
@@ -207,6 +213,7 @@ pal add <feature> <repo...>
 pal ls
 pal status <feature>
 pal open <feature>
+pal rename <old_feature> <new_feature>
 pal run <feature> <agent> [agent args...]
 pal plan <feature> <agent> [agent args...]
 pal implement <feature> <agent> [agent args...]

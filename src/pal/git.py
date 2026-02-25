@@ -91,6 +91,20 @@ def worktree_remove(repo_path: Path, worktree_path: Path, force: bool = True) ->
     subprocess.run(cmd, check=True)
 
 
+def worktree_move(repo_path: Path, old_worktree_path: Path, new_worktree_path: Path) -> None:
+    new_worktree_path.parent.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        "git",
+        "-C",
+        str(repo_path),
+        "worktree",
+        "move",
+        str(old_worktree_path),
+        str(new_worktree_path),
+    ]
+    subprocess.run(cmd, check=True)
+
+
 def git_status_short(repo_path: Path) -> str:
     return run(["git", "-C", str(repo_path), "status", "-sb"])
 

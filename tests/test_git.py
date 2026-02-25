@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from pal.git import worktree_add
+from pal.git import worktree_add, worktree_move
 
 
 def test_worktree_add_create_branch_uses_correct_git_args(
@@ -52,3 +52,26 @@ def test_worktree_add_existing_branch_uses_correct_git_args(
     # Expected: git -C /repo worktree add /wt/path feat/x
     assert cmd[:5] == ["git", "-C", str(repo_path), "worktree", "add"]
     assert cmd[5:] == [str(worktree_path), "feat/x"]
+
+
+def test_worktree_move_uses_correct_git_args(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, check=True, **_kwargs):  # noqa: ANN001
+        assert check is True
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    repo_path = tmp_path / "repo"
+    old_worktree_path = tmp_path / "wt" / "old"
+    new_worktree_path = tmp_path / "wt" / "new"
+    worktree_move(repo_path, old_worktree_path, new_worktree_path)
+
+    assert len(calls) == 1
+    cmd = calls[0]
+    assert cmd[:5] == ["git", "-C", str(repo_path), "worktree", "move"]
+    assert cmd[5:] == [str(old_worktree_path), str(new_worktree_path)]

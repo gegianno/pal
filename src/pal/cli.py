@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import os
 from pathlib import Path
+import shutil
+import sys
 from typing import Optional, List
 
 import typer
@@ -22,6 +25,7 @@ from .git import (
     list_child_repos,
     branch_exists,
     worktree_add,
+    worktree_move,
     worktree_remove,
     git_status_short,
     git_porcelain,
@@ -246,6 +250,7 @@ def _run_agent(feature_dir: Path, cfg, agent: str, intent: str, raw_args: list[s
         codex_args = raw_args
         if intent == "plan":
             codex_args = _codex_plan_args(raw_args)
+        _set_terminal_title(feature=feature_dir.name, agent=agent)
         console.print(
             Panel.fit(
                 f"workspace: {feature_dir}\n"
@@ -262,6 +267,7 @@ def _run_agent(feature_dir: Path, cfg, agent: str, intent: str, raw_args: list[s
     claude_add_dirs = _effective_claude_add_dirs(cfg)
     claude_mode = _flag_value(claude_args, "--permission-mode") or "(default)"
     claude_model = _flag_value(claude_args, "--model") or "(default)"
+    _set_terminal_title(feature=feature_dir.name, agent=agent)
 
     console.print(
         Panel.fit(
@@ -279,6 +285,18 @@ def _run_agent(feature_dir: Path, cfg, agent: str, intent: str, raw_args: list[s
         add_dirs=claude_add_dirs,
         extra_args=claude_args or None,
     )
+
+
+def _set_terminal_title(*, feature: str, agent: str) -> None:
+    if not sys.stdout.isatty():
+        return
+    if os.environ.get("TERM", "") == "dumb":
+        return
+
+    title = f"pal {feature} ({agent})"
+    safe = title.replace("\x1b", "").replace("\a", "").replace("\n", " ")
+    sys.stdout.write(f"\033]0;{safe}\007")
+    sys.stdout.flush()
 
 
 @app.command()
@@ -637,6 +655,85 @@ def implement(
         branch_prefix=branch_prefix,
         intent="implement",
     )
+
+
+@app.command()
+def rename(
+    old_feature: str = typer.Argument(..., autocompletion=complete_feature),
+    new_feature: str = typer.Argument(..., help="New feature workspace name."),
+    root: Path = typer.Option(Path("."), "--root", "-r"),
+    worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
+    branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation."),
+):
+    """Rename a feature workspace by moving all linked worktrees safely via git."""
+    cfg = _cfg_from_ctx(root, worktree_root, branch_prefix)
+    if old_feature == new_feature:
+        raise typer.BadParameter("Old and new feature names must be different.")
+
+    old_dir = _feature_dir(cfg, old_feature)
+    new_dir = _feature_dir(cfg, new_feature)
+    if not old_dir.exists():
+        raise typer.BadParameter(f"Feature workspace '{old_feature}' not found at {old_dir}")
+    if new_dir.exists():
+        raise typer.BadParameter(f"Feature workspace '{new_feature}' already exists at {new_dir}")
+
+    repos = sorted([p.name for p in old_dir.iterdir() if p.is_dir() and is_git_repo(p)])
+
+    if not yes:
+        if repos:
+            console.print(
+                Panel.fit(
+                    f"rename: {old_feature} -> {new_feature}\n"
+                    f"repos: {', '.join(repos)}\n"
+                    f"from: {old_dir}\n"
+                    f"to:   {new_dir}",
+                    title="Rename Worktrees",
+                )
+            )
+        else:
+            console.print(
+                Panel.fit(
+                    f"rename: {old_feature} -> {new_feature}\nfrom: {old_dir}\nto:   {new_dir}",
+                    title="Rename Workspace",
+                )
+            )
+        if not typer.confirm("Proceed?"):
+            raise typer.Exit(code=1)
+
+    if repos:
+        new_dir.mkdir(parents=True, exist_ok=False)
+        for repo in repos:
+            repo_path = _require_root_repo(cfg, repo)
+            old_wt = _worktree_path(cfg, old_feature, repo)
+            new_wt = _worktree_path(cfg, new_feature, repo)
+            console.print(
+                f"[cyan]~[/cyan] worktree move {old_feature}/{repo} -> {new_feature}/{repo}"
+            )
+            worktree_move(repo_path, old_wt, new_wt)
+
+        # Preserve any non-repo files/directories in the old feature folder.
+        for child in old_dir.iterdir():
+            target = new_dir / child.name
+            if target.exists():
+                raise typer.BadParameter(
+                    f"Cannot move leftover path '{child.name}' because destination exists at {target}"
+                )
+            shutil.move(str(child), str(target))
+
+        try:
+            old_dir.rmdir()
+        except OSError:
+            pass
+    else:
+        old_dir.rename(new_dir)
+
+    old_ws = new_dir / f"{old_feature}.code-workspace"
+    if old_ws.exists():
+        old_ws.unlink()
+
+    ws_path = _refresh_workspace(cfg, new_feature)
+    console.print(f"[green]\u2713[/green] renamed workspace: {ws_path}")
 
 
 @app.command()

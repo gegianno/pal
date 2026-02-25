@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+import pal.cli as cli_module
 from pal.cli import app
 
 
@@ -85,6 +86,69 @@ def test_new_creates_workspace_file(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     result = runner.invoke(app, ["new", feature, "repo1", "--root", str(root)])
     assert result.exit_code == 0, result.output
     assert (root / "_wt" / feature / f"{feature}.code-workspace").exists()
+
+
+def test_rename_moves_worktrees_and_refreshes_workspace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "projects"
+    old_feature = "email-old"
+    new_feature = "email-new"
+    repo = "repo1"
+    old_repo_path = root / "_wt" / old_feature / repo
+    old_repo_path.mkdir(parents=True)
+    (root / repo).mkdir(parents=True, exist_ok=True)
+    (root / "_wt" / old_feature / f"{old_feature}.code-workspace").write_text(
+        "{}\n", encoding="utf-8"
+    )
+
+    calls: list[tuple[Path, Path, Path]] = []
+
+    def fake_is_git_repo(path: Path) -> bool:
+        return path.name == repo
+
+    def fake_worktree_move(repo_path: Path, old_worktree: Path, new_worktree: Path) -> None:
+        calls.append((repo_path, old_worktree, new_worktree))
+        new_worktree.parent.mkdir(parents=True, exist_ok=True)
+        old_worktree.rename(new_worktree)
+
+    monkeypatch.setattr("pal.cli.is_git_repo", fake_is_git_repo)
+    monkeypatch.setattr("pal.cli.worktree_move", fake_worktree_move)
+    monkeypatch.setattr("pal.vscode.is_git_repo", fake_is_git_repo)
+
+    result = runner.invoke(app, ["rename", old_feature, new_feature, "--root", str(root), "--yes"])
+    assert result.exit_code == 0, result.output
+    assert calls == [
+        (root / repo, root / "_wt" / old_feature / repo, root / "_wt" / new_feature / repo)
+    ]
+    assert not (root / "_wt" / old_feature).exists()
+    assert (root / "_wt" / new_feature / repo).exists()
+    assert (root / "_wt" / new_feature / f"{new_feature}.code-workspace").exists()
+    assert not (root / "_wt" / new_feature / f"{old_feature}.code-workspace").exists()
+
+
+def test_set_terminal_title_writes_osc_sequence(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeStdout:
+        def __init__(self) -> None:
+            self.buffer = ""
+
+        def isatty(self) -> bool:
+            return True
+
+        def write(self, value: str) -> int:
+            self.buffer += value
+            return len(value)
+
+        def flush(self) -> None:
+            return None
+
+    fake = FakeStdout()
+    monkeypatch.setattr(cli_module.sys, "stdout", fake)
+    monkeypatch.setenv("TERM", "xterm-256color")
+
+    cli_module._set_terminal_title(feature="feat-auth", agent="codex")
+    assert "pal feat-auth (codex)" in fake.buffer
+    assert fake.buffer.startswith("\033]0;")
 
 
 def test_run_codex_forwards_args_to_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
