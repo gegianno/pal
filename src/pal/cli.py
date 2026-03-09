@@ -4,6 +4,7 @@ from copy import deepcopy
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 from typing import Optional, List
 
@@ -784,12 +785,29 @@ def rm(
         if not typer.confirm("Proceed?"):
             raise typer.Exit(code=1)
 
+    failed_removals: list[tuple[str, Path, str]] = []
     for r in targets:
         repo_path = _require_root_repo(cfg, r)
         wt_path = _worktree_path(cfg, feature, r)
         if wt_path.exists():
             console.print(f"[red]-[/red] worktree remove {feature}/{r} → {wt_path}")
-            worktree_remove(repo_path, wt_path, force=True)
+            try:
+                worktree_remove(repo_path, wt_path, force=True)
+            except subprocess.CalledProcessError as exc:
+                detail = ""
+                if isinstance(exc.stderr, str) and exc.stderr.strip():
+                    detail = exc.stderr.strip()
+                elif isinstance(exc.stdout, str) and exc.stdout.strip():
+                    detail = exc.stdout.strip()
+                elif exc.output:
+                    detail = str(exc.output).strip()
+                else:
+                    detail = f"exit status {exc.returncode}"
+                failed_removals.append((r, wt_path, detail))
+                console.print(
+                    f"[yellow]![/yellow] could not remove {feature}/{r}. "
+                    "This path may not be a registered git worktree for that repo."
+                )
 
     # Refresh/remove workspace file based on what's left.
     remaining_repos = [p for p in feature_dir.iterdir() if p.is_dir() and is_git_repo(p)]
@@ -799,6 +817,26 @@ def rm(
         import shutil
 
         shutil.rmtree(feature_dir, ignore_errors=True)
+
+    if failed_removals:
+        table = Table(title="Worktree Removal Issues", header_style="bold")
+        table.add_column("Repo")
+        table.add_column("Path")
+        table.add_column("Details")
+        for repo, path, detail in failed_removals:
+            table.add_row(repo, str(path), detail or "(no details)")
+        console.print(table)
+        console.print(
+            Panel.fit(
+                "Some paths were not removed safely.\n"
+                "Options:\n"
+                "1. Check if the path is registered with `git -C <repo> worktree list`.\n"
+                "2. If it's an orphan folder (not in git worktree list), move/save any local files and remove it manually.\n"
+                "3. Re-run `pal rm <feature>` after cleanup.",
+                title="Partial Removal",
+            )
+        )
+        raise typer.Exit(code=1)
 
     console.print("[green]✓[/green] removed")
 

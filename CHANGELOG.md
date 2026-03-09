@@ -12,7 +12,8 @@ This project aims to follow Keep a Changelog and Semantic Versioning.
 - `pal plan <feature> codex` now launches Codex with `/plan` as the initial prompt.
 - Add `[claude]` config defaults: `permission_mode`, model, extra args, add_dirs, and bypass guardrail.
 - Add `pal rename <old_feature> <new_feature>` to move linked worktrees safely.
-- Set terminal title on agent launch to include feature, agent, and intent.
+- Set terminal title on agent launch to include feature and agent.
+- Improve `pal rm` error handling for unregistered/orphan worktree paths (actionable guidance, no traceback).
 - Add `--version` flag.
 - Add shell autocompletion for common arguments.
 - Add `[agent].add_dirs` support for extra writable roots.

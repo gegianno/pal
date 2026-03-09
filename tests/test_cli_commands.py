@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 
 import pytest
 from typer.testing import CliRunner
@@ -125,6 +126,39 @@ def test_rename_moves_worktrees_and_refreshes_workspace(
     assert (root / "_wt" / new_feature / repo).exists()
     assert (root / "_wt" / new_feature / f"{new_feature}.code-workspace").exists()
     assert not (root / "_wt" / new_feature / f"{old_feature}.code-workspace").exists()
+
+
+def test_rm_reports_unregistered_worktree_without_traceback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "projects"
+    feature = "admin-app"
+    repo = "admin"
+    (root / repo).mkdir(parents=True)
+    (root / "_wt" / feature / repo).mkdir(parents=True)
+
+    def fake_is_git_repo(path: Path) -> bool:
+        return path.name == repo
+
+    def fake_worktree_remove(_repo_path: Path, _worktree_path: Path, force: bool = True) -> None:
+        assert force is True
+        raise subprocess.CalledProcessError(
+            128,
+            ["git", "worktree", "remove"],
+            stderr="fatal: '/tmp/x' is not a working tree",
+        )
+
+    monkeypatch.setattr("pal.cli.is_git_repo", fake_is_git_repo)
+    monkeypatch.setattr("pal.vscode.is_git_repo", fake_is_git_repo)
+    monkeypatch.setattr("pal.cli.worktree_remove", fake_worktree_remove)
+
+    result = runner.invoke(app, ["rm", feature, "--root", str(root), "--yes"])
+    assert result.exit_code == 1
+    assert "Worktree Removal Issues" in result.output
+    assert "Partial Removal" in result.output
+    assert "could not remove admin-app/admin" in result.output
+    assert "worktree list" in result.output
+    assert "Traceback" not in result.output
 
 
 def test_set_terminal_title_writes_osc_sequence(monkeypatch: pytest.MonkeyPatch) -> None:
