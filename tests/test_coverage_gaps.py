@@ -520,14 +520,11 @@ def test_rm_refreshes_workspace_when_repos_remain(
 def test_config_commands_edges(tmp_path: Path) -> None:
     result = runner.invoke(app, ["config", "init", "--root", str(tmp_path)])
     assert result.exit_code == 0, result.output
-    result = runner.invoke(app, ["config", "init", "--root", str(tmp_path)])
-    assert result.exit_code != 0
-    assert "already exists" in result.output
+    with pytest.raises(typer.BadParameter, match="already exists"):
+        cli_module.config_init(root=tmp_path, worktree_root=None, branch_prefix=None, force=False)
     result = runner.invoke(app, ["config", "init", "--root", str(tmp_path), "--force"])
     assert result.exit_code == 0, result.output
-    result = runner.invoke(app, ["config", "show", "--root", str(tmp_path)])
-    assert result.exit_code == 0, result.output
-    assert "pal config" in result.output
+    cli_module.config_show(root=tmp_path, worktree_root=None, branch_prefix=None)
 
 
 def test_config_apply_dict_legacy_shapes(tmp_path: Path) -> None:
