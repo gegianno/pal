@@ -8,7 +8,7 @@ import platformdirs
 
 try:
     import tomllib  # py>=3.11
-except Exception:  # pragma: no cover
+except Exception:  # pragma: no cover - only exercised on Python <3.11 runtimes.
     import tomli as tomllib  # type: ignore
 
 
@@ -76,7 +76,7 @@ class PalConfig:
 
     # Backward-compatible alias (older name used `ws_*`).
     @property
-    def ws_local_path(self) -> Path:  # pragma: no cover
+    def ws_local_path(self) -> Path:  # pragma: no cover - compatibility alias for older callers.
         return self.local_config_path
 
 
