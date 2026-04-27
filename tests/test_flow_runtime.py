@@ -1,0 +1,16 @@
+from __future__ import annotations
+
+from pathlib import Path
+from types import SimpleNamespace
+
+from pal.flow_provider import FakeFlowProvider
+from pal.flow_runtime import build_local_flow_service
+from pal.flow_store import LocalFlowStore
+
+
+def test_build_local_flow_service_wires_store_and_fake_provider(tmp_path: Path) -> None:
+    service = build_local_flow_service(SimpleNamespace(worktree_root=tmp_path / "_wt"))
+
+    assert isinstance(service.store, LocalFlowStore)
+    assert isinstance(service.provider, FakeFlowProvider)
+    assert service.store.worktree_root == tmp_path / "_wt"

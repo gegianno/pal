@@ -34,6 +34,7 @@ from .git import (
 from .vscode import write_code_workspace
 from .claude import run_interactive as run_claude_interactive
 from .codex import run_interactive as run_codex_interactive
+from .flow_cli import flow_app
 from .local_files import copy_local_files, resolve_local_file_paths
 
 app = typer.Typer(
@@ -43,6 +44,7 @@ app = typer.Typer(
 )
 console = Console()
 AGENTS = ("claude", "codex")
+app.add_typer(flow_app, name="flow")
 CODEX_BLOCKED_PLAN_ARGS = {
     "app-server",
     "cloud",
