@@ -210,6 +210,35 @@ def flow_validate(
         raise typer.Exit(1)
 
 
+@flow_app.command("render")
+def flow_render(
+    feature: str = typer.Argument(..., help="Feature workspace name."),
+    provider: Optional[str] = typer.Option(None, "--provider", help="Provider guidance filter."),
+    run_id: Optional[str] = typer.Option(None, "--run-id", help="Run ID. Defaults to latest."),
+    root: Path = typer.Option(Path("."), "--root", "-r"),
+    worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
+    branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
+) -> None:
+    """Render the current phase brief without launching agents."""
+    service = _service_from_options(root, worktree_root, branch_prefix)
+    brief = _change_or_error(
+        service,
+        "render_phase",
+        feature,
+        run_id=run_id,
+        provider_name=provider or "",
+    )
+    console.print(
+        Panel.fit(
+            f"run_id: {brief.run.run_id}\n"
+            f"phase: {brief.phase.value}\n"
+            f"markdown: {brief.paths['markdown']}\n"
+            f"json: {brief.paths['json']}",
+            title="pal flow rendered",
+        )
+    )
+
+
 @flow_app.command("approve")
 def flow_approve(
     feature: str = typer.Argument(..., help="Feature workspace name."),

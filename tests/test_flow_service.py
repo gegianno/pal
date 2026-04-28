@@ -27,10 +27,14 @@ def _workflow_body(
     provider: str = "fake",
     requirement: str = "local_headless",
     agent_provider: str = "",
+    design_required_artifact: bool = False,
     design_requires_approval: bool = False,
     implement_blocked_transition: bool = False,
 ) -> str:
     agent_provider_line = f"        provider: {agent_provider}\n" if agent_provider else ""
+    required_artifact_lines = (
+        "    required_artifacts:\n      - artifacts/design.md\n" if design_required_artifact else ""
+    )
     approval_line = "    requires_approval: true\n" if design_requires_approval else ""
     transition_lines = (
         "    transitions:\n      - on: blocked\n        to: design\n"
@@ -49,7 +53,7 @@ defaults:
 phases:
   - id: design
     policy: co-driver
-{approval_line}    transitions:
+{required_artifact_lines}{approval_line}    transitions:
       - on: complete
         to: implement
     agents:
@@ -298,6 +302,59 @@ def test_flow_service_start_rejects_invalid_workflow(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Workflow spec is invalid"):
         service.start(feature="feat", repos=[], workflow="bad")
+
+
+def test_flow_service_render_phase_writes_brief_artifacts_and_event(tmp_path: Path) -> None:
+    ids = _ids()
+    store = LocalFlowStore(tmp_path / "_wt")
+    _write_workflow(
+        tmp_path,
+        "dev-complex",
+        _workflow_body(design_required_artifact=True, design_requires_approval=True),
+    )
+    service = LocalFlowService(
+        store=store,
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+        clock=lambda: "2026-04-27T00:00:00Z",
+        id_factory=lambda _prefix: ids.pop(0),
+    )
+    run = service.start(feature="feat", repos=[], workflow="dev-complex")
+
+    brief = service.render_phase("feat")
+
+    assert brief.paths == {
+        "markdown": str(store.phase_dir("feat", run.run_id, "design") / "brief.md"),
+        "json": str(store.phase_dir("feat", run.run_id, "design") / "brief.json"),
+    }
+    assert (
+        Path(brief.paths["markdown"])
+        .read_text(encoding="utf-8")
+        .startswith("# pal flow phase brief")
+    )
+    data = store.read_run_json("feat", run.run_id, "phase/design/brief.json")
+    assert isinstance(data, dict)
+    assert data["phase"]["required_artifacts"] == ["artifacts/design.md"]
+    assert data["phase"]["requires_approval"] is True
+    assert data["paths"] == brief.paths
+    assert service.events("feat")[-1].type == "flow.phase.rendered"
+    assert service.events("feat")[-1].payload["providers"] == ["fake"]
+
+
+def test_flow_service_render_phase_filters_provider_and_rejects_unknown_provider(
+    tmp_path: Path,
+) -> None:
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+    )
+    service.start(feature="feat", repos=[])
+
+    brief = service.render_phase("feat", provider_name="fake")
+
+    assert list(brief.provider_guidance) == ["fake"]
+    with pytest.raises(ValueError, match="Unknown provider"):
+        service.render_phase("feat", provider_name="missing")
 
 
 def test_flow_service_advances_default_phase_order_and_completes(tmp_path: Path) -> None:

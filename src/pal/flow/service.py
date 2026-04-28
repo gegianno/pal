@@ -6,6 +6,7 @@ from typing import Callable, Mapping
 
 from .models import FlowEvent, FlowPhase, FlowPolicy, FlowRun, FlowStatus, new_id, utc_now
 from .providers.base import FlowProvider, ProviderLaunchRequest, ProviderPreflight
+from .rendering import PhaseBrief, build_phase_brief
 from .store import LocalFlowStore
 from .workflows.library import LocalWorkflowLibrary, WorkflowSpecError
 from .workflows.models import WorkflowSpec, WorkflowValidationResult
@@ -236,6 +237,46 @@ class LocalFlowService:
 
     def events(self, feature: str, run_id: str | None = None) -> list[FlowEvent]:
         return self.store.read_events(feature, run_id)
+
+    def render_phase(
+        self,
+        feature: str,
+        *,
+        run_id: str | None = None,
+        provider_name: str = "",
+    ) -> PhaseBrief:
+        if provider_name:
+            self.provider(provider_name)
+        run = self.status(feature, run_id)
+        workflow = self._stored_workflow(run)
+        events = self.events(feature, run.run_id)
+        brief = build_phase_brief(
+            run=run,
+            workflow=workflow,
+            events=events,
+            rendered_at=self.clock(),
+            default_provider=self.default_provider,
+            provider_filter=provider_name,
+        )
+        paths = self.store.write_phase_brief(
+            run,
+            phase=run.current_phase.value,
+            markdown=brief.to_markdown(),
+            data=brief.to_dict(),
+        )
+        rendered = brief.with_paths(paths)
+        self._append_event(
+            run,
+            event_type="flow.phase.rendered",
+            actor="pal",
+            payload={
+                "phase": run.current_phase.value,
+                "markdown": paths["markdown"],
+                "json": paths["json"],
+                "providers": sorted(rendered.provider_guidance),
+            },
+        )
+        return rendered
 
     def approve(
         self,

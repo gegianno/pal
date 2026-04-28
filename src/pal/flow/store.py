@@ -38,6 +38,9 @@ class LocalFlowStore:
     def provider_log_path(self, feature: str, run_id: str, provider: str) -> Path:
         return self.run_dir(feature, run_id) / "providers" / f"{provider}.jsonl"
 
+    def phase_dir(self, feature: str, run_id: str, phase: str) -> Path:
+        return self.run_dir(feature, run_id) / "phase" / phase
+
     def create_run(self, run: FlowRun) -> None:
         run_dir = self.run_dir(run.feature, run.run_id)
         run_dir.mkdir(parents=True, exist_ok=False)
@@ -83,6 +86,27 @@ class LocalFlowStore:
             "stderr": str(stderr_path),
             "provider_log": str(provider_path),
         }
+
+    def write_phase_brief(
+        self,
+        run: FlowRun,
+        *,
+        phase: str,
+        markdown: str,
+        data: dict[str, object],
+    ) -> dict[str, str]:
+        phase_dir = self.phase_dir(run.feature, run.run_id, phase)
+        phase_dir.mkdir(parents=True, exist_ok=True)
+        markdown_path = phase_dir / "brief.md"
+        json_path = phase_dir / "brief.json"
+        paths = {"markdown": str(markdown_path), "json": str(json_path)}
+        data_with_paths = {**data, "paths": paths}
+        markdown_path.write_text(markdown, encoding="utf-8")
+        json_path.write_text(
+            json.dumps(data_with_paths, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return paths
 
     def load_state(self, feature: str, run_id: str) -> FlowRun:
         data = json.loads(self.state_path(feature, run_id).read_text(encoding="utf-8"))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -75,6 +76,27 @@ def test_store_writes_run_json_and_latest_provider_outputs(tmp_path: Path) -> No
     assert Path(output_paths["stderr"]).read_text(encoding="utf-8") == "warning\n"
     assert Path(output_paths["provider_log"]) == store.provider_log_path("feat", "run_1", "fake")
     assert store.latest_output_dir("feat", "run_1") == store.run_dir("feat", "run_1") / "latest"
+
+
+def test_store_writes_phase_brief_artifacts(tmp_path: Path) -> None:
+    store = LocalFlowStore(tmp_path / "_wt")
+    run = _run()
+    store.create_run(run)
+
+    paths = store.write_phase_brief(
+        run,
+        phase="explore",
+        markdown="# Brief\n",
+        data={"phase": {"id": "explore"}},
+    )
+
+    assert store.phase_dir("feat", "run_1", "explore") == (
+        store.run_dir("feat", "run_1") / "phase" / "explore"
+    )
+    assert Path(paths["markdown"]).read_text(encoding="utf-8") == "# Brief\n"
+    parsed = json.loads(Path(paths["json"]).read_text(encoding="utf-8"))
+    assert parsed["phase"]["id"] == "explore"
+    assert parsed["paths"] == paths
 
 
 def test_store_save_state_updates_existing_run(tmp_path: Path) -> None:

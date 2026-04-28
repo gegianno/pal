@@ -145,6 +145,7 @@ Validate specs and start a workflow-backed run:
 pal flow providers
 pal flow validate dev-complex
 pal flow start feat-auth --workflow dev-complex
+pal flow render feat-auth
 pal flow approve feat-auth
 pal flow advance feat-auth
 pal flow block feat-auth --reason "implementation hit a dependency issue"
@@ -160,6 +161,11 @@ is passed.
 Phase progression is explicit too. `advance` follows workflow transitions, `approve` satisfies
 `requires_approval: true` gates, and `block`/`replan` records replanning loops without hiding them
 inside agent output.
+
+`pal flow render <feature>` compiles the current phase into durable
+`.pal/runs/<run-id>/phase/<phase>/brief.md` and `brief.json` artifacts. The brief includes run
+state, the active policy, resolved phase agents, required artifacts, recent events, approvals,
+blockers, and small provider-specific guidance for the selected provider.
 
 ---
 

@@ -273,6 +273,43 @@ phases:
     assert "Unknown provider" in result.output
 
 
+def test_flow_render_writes_phase_brief_artifacts(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "dev-complex", _valid_workflow())
+    start = runner.invoke(
+        app,
+        ["flow", "start", "feat", "--root", str(tmp_path), "--workflow", "dev-complex"],
+    )
+    assert start.exit_code == 0, start.output
+
+    result = runner.invoke(
+        app,
+        ["flow", "render", "feat", "--root", str(tmp_path), "--provider", "fake"],
+    )
+
+    store = LocalFlowStore(tmp_path / "_wt")
+    run_id = store.latest_run_id("feat")
+    phase_dir = store.phase_dir("feat", run_id, "design")
+    assert result.exit_code == 0, result.output
+    assert "pal flow rendered" in result.output
+    assert "brief.md" in result.output
+    assert (phase_dir / "brief.md").is_file()
+    assert (phase_dir / "brief.json").is_file()
+    assert _event_types(tmp_path, "feat")[-1] == "flow.phase.rendered"
+
+
+def test_flow_render_rejects_unknown_provider(tmp_path: Path) -> None:
+    start = runner.invoke(app, ["flow", "start", "feat", "--root", str(tmp_path)])
+    assert start.exit_code == 0, start.output
+
+    result = runner.invoke(
+        app,
+        ["flow", "render", "feat", "--root", str(tmp_path), "--provider", "missing"],
+    )
+
+    assert result.exit_code != 0
+    assert "Unknown provider" in _plain(result.output)
+
+
 def test_flow_advance_default_run_updates_phase(tmp_path: Path) -> None:
     start = runner.invoke(
         app,
