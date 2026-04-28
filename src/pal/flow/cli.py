@@ -244,6 +244,7 @@ def flow_execute(
     feature: str = typer.Argument(..., help="Feature workspace name."),
     provider: Optional[str] = typer.Option(None, "--provider", help="Provider execution filter."),
     agent: Optional[str] = typer.Option(None, "--agent", help="Single rendered agent ID to run."),
+    force_policy: bool = typer.Option(False, "--force-policy", help="Override observer policy."),
     run_id: Optional[str] = typer.Option(None, "--run-id", help="Run ID. Defaults to latest."),
     root: Path = typer.Option(Path("."), "--root", "-r"),
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
@@ -258,6 +259,7 @@ def flow_execute(
         run_id=run_id,
         provider_name=provider or "",
         agent_id=agent or "",
+        force_policy=force_policy,
     )
     manifests = (
         "\n".join(execution.paths["manifest"] for execution in summary.executions) or "(none)"
@@ -272,6 +274,74 @@ def flow_execute(
             title="pal flow executed",
         )
     )
+
+
+@flow_app.command("artifacts")
+def flow_artifacts(
+    feature: str = typer.Argument(..., help="Feature workspace name."),
+    run_id: Optional[str] = typer.Option(None, "--run-id", help="Run ID. Defaults to latest."),
+    root: Path = typer.Option(Path("."), "--root", "-r"),
+    worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
+    branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
+) -> None:
+    """Validate required artifacts for the current phase."""
+    service = _service_from_options(root, worktree_root, branch_prefix)
+    validation = _change_or_error(service, "check_artifacts", feature, run_id=run_id)
+    table = Table(title=f"Flow artifacts: {feature}", header_style="bold")
+    table.add_column("Artifact")
+    table.add_column("Exists")
+    table.add_column("Path")
+    for check in validation.checks:
+        table.add_row(check.name, "yes" if check.exists else "no", check.path)
+    if not validation.checks:
+        table.add_row("(none)", "yes", "(no required artifacts)")
+    console.print(table)
+    if not validation.valid:
+        raise typer.Exit(1)
+
+
+@flow_app.command("run")
+def flow_run(
+    feature: str = typer.Argument(..., help="Feature workspace name."),
+    provider: Optional[str] = typer.Option(None, "--provider", help="Provider execution filter."),
+    max_phases: int = typer.Option(10, "--max-phases", help="Maximum phases to execute."),
+    co_driver_auto_advance: bool = typer.Option(
+        False,
+        "--co-driver-auto-advance",
+        help="Allow co-driver phases to advance automatically.",
+    ),
+    force_policy: bool = typer.Option(False, "--force-policy", help="Override observer policy."),
+    force_artifacts: bool = typer.Option(
+        False,
+        "--force-artifacts",
+        help="Allow auto-advance with missing required artifacts.",
+    ),
+    run_id: Optional[str] = typer.Option(None, "--run-id", help="Run ID. Defaults to latest."),
+    root: Path = typer.Option(Path("."), "--root", "-r"),
+    worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
+    branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
+) -> None:
+    """Execute policy-aware phases until the flow stops."""
+    service = _service_from_options(root, worktree_root, branch_prefix)
+    summary = _change_or_error(
+        service,
+        "run_flow",
+        feature,
+        run_id=run_id,
+        provider_name=provider or "",
+        max_phases=max_phases,
+        co_driver_auto_advance=co_driver_auto_advance,
+        force_policy=force_policy,
+        force_artifacts=force_artifacts,
+    )
+    lines = [
+        f"run_id: {summary.run.run_id}",
+        f"status: {summary.status}",
+        f"phase: {summary.run.current_phase.value}",
+        f"run_status: {summary.run.status.value}",
+        f"steps: {len(summary.steps)}",
+    ]
+    console.print(Panel.fit("\n".join(lines), title="pal flow run"))
 
 
 @flow_app.command("approve")
@@ -304,6 +374,11 @@ def flow_approve(
 def flow_advance(
     feature: str = typer.Argument(..., help="Feature workspace name."),
     signal: str = typer.Option("complete", "--on", help="Transition signal."),
+    force_artifacts: bool = typer.Option(
+        False,
+        "--force-artifacts",
+        help="Advance even if required artifacts are missing.",
+    ),
     run_id: Optional[str] = typer.Option(None, "--run-id", help="Run ID. Defaults to latest."),
     root: Path = typer.Option(Path("."), "--root", "-r"),
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
@@ -311,7 +386,14 @@ def flow_advance(
 ) -> None:
     """Advance a run through the workflow state machine."""
     service = _service_from_options(root, worktree_root, branch_prefix)
-    run = _change_or_error(service, "advance", feature, run_id=run_id, signal=signal)
+    run = _change_or_error(
+        service,
+        "advance",
+        feature,
+        run_id=run_id,
+        signal=signal,
+        force_artifacts=force_artifacts,
+    )
     console.print(
         Panel.fit(
             f"run_id: {run.run_id}\nphase: {run.current_phase.value}\nstatus: {run.status.value}",

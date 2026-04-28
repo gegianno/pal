@@ -4,6 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Mapping
 
+from .artifacts import ArtifactValidation, validate_required_artifacts
 from .execution import (
     PhaseExecutionRecord,
     PhaseExecutionSummary,
@@ -11,7 +12,10 @@ from .execution import (
     execution_status,
     phase_execution_targets,
 )
+from .hooks import FlowHookDispatcher
+from .loop import FlowRunLoopSummary, FlowRunStep
 from .models import FlowEvent, FlowPhase, FlowPolicy, FlowRun, FlowStatus, new_id, utc_now
+from .policy import auto_advance_allowed, ensure_execution_allowed, phase_policy
 from .providers.base import FlowProvider, ProviderLaunchRequest, ProviderPreflight
 from .rendering import PhaseBrief, build_phase_brief
 from .store import LocalFlowStore
@@ -47,6 +51,7 @@ class LocalFlowService:
         *,
         default_provider: str = "fake",
         workflow_library: LocalWorkflowLibrary | None = None,
+        hooks: FlowHookDispatcher | None = None,
         clock: Callable[[], str] = utc_now,
         id_factory: Callable[[str], str] = new_id,
     ) -> None:
@@ -54,6 +59,7 @@ class LocalFlowService:
         self.providers = dict(providers)
         self.default_provider = default_provider
         self.workflow_library = workflow_library
+        self.hooks = hooks or FlowHookDispatcher()
         self.clock = clock
         self.id_factory = id_factory
 
@@ -245,6 +251,26 @@ class LocalFlowService:
     def events(self, feature: str, run_id: str | None = None) -> list[FlowEvent]:
         return self.store.read_events(feature, run_id)
 
+    def hook_results(self, feature: str, run_id: str | None = None) -> list[object]:
+        return self.store.read_hook_results(feature, run_id)
+
+    def check_artifacts(
+        self,
+        feature: str,
+        *,
+        run_id: str | None = None,
+    ) -> ArtifactValidation:
+        run = self.status(feature, run_id)
+        workflow = self._stored_workflow(run)
+        validation = self._artifact_validation(run, workflow)
+        self._append_event(
+            run,
+            event_type="flow.artifacts.checked",
+            actor="pal",
+            payload=validation.to_dict(),
+        )
+        return validation
+
     def render_phase(
         self,
         feature: str,
@@ -292,11 +318,14 @@ class LocalFlowService:
         run_id: str | None = None,
         provider_name: str = "",
         agent_id: str = "",
+        force_policy: bool = False,
     ) -> PhaseExecutionSummary:
         if provider_name:
             self.provider(provider_name)
         run = self.status(feature, run_id)
         self._ensure_can_mutate(run)
+        policy = phase_policy(run)
+        ensure_execution_allowed(policy, force=force_policy)
         brief = self.render_phase(
             feature,
             run_id=run.run_id,
@@ -311,6 +340,8 @@ class LocalFlowService:
                 "phase": run.current_phase.value,
                 "targets": [target.to_dict() for target in targets],
                 "brief": dict(brief.paths),
+                "policy": policy.value,
+                "force_policy": force_policy,
             },
         )
 
@@ -389,6 +420,122 @@ class LocalFlowService:
         )
         return summary
 
+    def run_flow(
+        self,
+        feature: str,
+        *,
+        run_id: str | None = None,
+        provider_name: str = "",
+        max_phases: int = 10,
+        co_driver_auto_advance: bool = False,
+        force_policy: bool = False,
+        force_artifacts: bool = False,
+    ) -> FlowRunLoopSummary:
+        if max_phases < 1:
+            raise ValueError("max_phases must be at least 1.")
+        if provider_name:
+            self.provider(provider_name)
+
+        steps: list[FlowRunStep] = []
+        run = self.status(feature, run_id)
+        for _ in range(max_phases):
+            self._ensure_can_mutate(run)
+            workflow = self._stored_workflow(run)
+            policy = phase_policy(run)
+
+            if policy == FlowPolicy.OBSERVER and not force_policy:
+                self.render_phase(feature, run_id=run.run_id, provider_name=provider_name)
+                step = FlowRunStep(
+                    phase=run.current_phase,
+                    policy=policy,
+                    status="observer_stopped",
+                    message="observer policy rendered the phase and stopped before execution",
+                )
+                steps.append(step)
+                return self._finish_run_loop(run, "observer_stopped", steps)
+
+            execution = self.execute_phase(
+                feature,
+                run_id=run.run_id,
+                provider_name=provider_name,
+                force_policy=force_policy,
+            )
+            validation = self.check_artifacts(feature, run_id=run.run_id)
+            if execution.status != "completed":
+                steps.append(
+                    FlowRunStep(
+                        phase=run.current_phase,
+                        policy=policy,
+                        status="execution_failed",
+                        message="phase execution failed",
+                        execution=execution,
+                        artifacts=validation,
+                    )
+                )
+                return self._finish_run_loop(run, "failed", steps)
+            if not validation.valid and not force_artifacts:
+                steps.append(
+                    FlowRunStep(
+                        phase=run.current_phase,
+                        policy=policy,
+                        status="missing_artifacts",
+                        message="required phase artifacts are missing",
+                        execution=execution,
+                        artifacts=validation,
+                    )
+                )
+                return self._finish_run_loop(run, "missing_artifacts", steps)
+            if self._approval_required_but_missing(run, workflow):
+                steps.append(
+                    FlowRunStep(
+                        phase=run.current_phase,
+                        policy=policy,
+                        status="waiting_approval",
+                        message="phase requires approval before advance",
+                        execution=execution,
+                        artifacts=validation,
+                    )
+                )
+                return self._finish_run_loop(run, "waiting_approval", steps)
+            if not auto_advance_allowed(
+                policy,
+                co_driver_auto_advance=co_driver_auto_advance,
+            ):
+                steps.append(
+                    FlowRunStep(
+                        phase=run.current_phase,
+                        policy=policy,
+                        status="waiting_human",
+                        message=f"{policy.value} policy requires an explicit advance",
+                        execution=execution,
+                        artifacts=validation,
+                    )
+                )
+                return self._finish_run_loop(run, "waiting_human", steps)
+
+            advanced = self.advance(
+                feature,
+                run_id=run.run_id,
+                force_artifacts=force_artifacts,
+                actor="pal-run",
+            )
+            steps.append(
+                FlowRunStep(
+                    phase=run.current_phase,
+                    policy=policy,
+                    status="advanced",
+                    message="phase advanced automatically",
+                    execution=execution,
+                    artifacts=validation,
+                    advanced_to=advanced.current_phase,
+                )
+            )
+            run = advanced
+            if run.status == FlowStatus.COMPLETED:
+                return self._finish_run_loop(run, "completed", steps)
+
+        return self._finish_run_loop(run, "max_phases", steps)
+
     def approve(
         self,
         feature: str,
@@ -424,6 +571,7 @@ class LocalFlowService:
         run_id: str | None = None,
         signal: str = "complete",
         actor: str = "pal",
+        force_artifacts: bool = False,
     ) -> FlowRun:
         run = self.status(feature, run_id)
         self._ensure_can_mutate(run)
@@ -431,6 +579,13 @@ class LocalFlowService:
         signal = signal.strip() or "complete"
         if signal == "complete" and self._approval_required_but_missing(run, workflow):
             raise ValueError(f"Phase '{run.current_phase.value}' requires approval before advance.")
+        if signal == "complete" and not force_artifacts:
+            validation = self._artifact_validation(run, workflow)
+            if not validation.valid:
+                missing = ", ".join(check.name for check in validation.missing)
+                raise ValueError(
+                    f"Phase '{run.current_phase.value}' is missing required artifacts: {missing}."
+                )
 
         target = self._transition_target(run, workflow, signal)
         now = self.clock()
@@ -457,7 +612,11 @@ class LocalFlowService:
                 updated,
                 event_type="flow.run.completed",
                 actor=actor,
-                payload={"phase": run.current_phase.value, "on": signal},
+                payload={
+                    "phase": run.current_phase.value,
+                    "on": signal,
+                    "force_artifacts": force_artifacts,
+                },
             )
             return updated
 
@@ -484,7 +643,12 @@ class LocalFlowService:
             updated,
             event_type="flow.phase.advanced",
             actor=actor,
-            payload={"from": run.current_phase.value, "to": target.value, "on": signal},
+            payload={
+                "from": run.current_phase.value,
+                "to": target.value,
+                "on": signal,
+                "force_artifacts": force_artifacts,
+            },
         )
         return updated
 
@@ -564,6 +728,39 @@ class LocalFlowService:
             },
         )
         return updated
+
+    def _artifact_validation(
+        self,
+        run: FlowRun,
+        workflow: WorkflowSpec | None,
+    ) -> ArtifactValidation:
+        return validate_required_artifacts(
+            run,
+            workspace_dir=self.store.feature_dir(run.feature),
+            required_artifacts=self._phase_required_artifacts(run, workflow),
+        )
+
+    def _phase_required_artifacts(
+        self,
+        run: FlowRun,
+        workflow: WorkflowSpec | None,
+    ) -> list[str]:
+        return list(workflow.phase(run.current_phase).required_artifacts if workflow else [])
+
+    def _finish_run_loop(
+        self,
+        run: FlowRun,
+        status: str,
+        steps: list[FlowRunStep],
+    ) -> FlowRunLoopSummary:
+        summary = FlowRunLoopSummary(run=run, status=status, steps=list(steps))
+        self._append_event(
+            run,
+            event_type=f"flow.run_loop.{status}",
+            actor="pal",
+            payload=summary.to_dict(),
+        )
+        return summary
 
     def _workflow_provider_errors(self, spec: WorkflowSpec) -> list[str]:
         errors: list[str] = []
@@ -683,3 +880,4 @@ class LocalFlowService:
             correlation_id=run.run_id,
         )
         self.store.append_event(run.feature, run.run_id, event)
+        self.hooks.dispatch(event=event, run=run, store=self.store)

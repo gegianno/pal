@@ -57,6 +57,41 @@ phases:
 """
 
 
+def _artifact_workflow() -> str:
+    return """
+version: 1
+name: artifact
+work_type: dev
+defaults:
+  provider: fake
+phases:
+  - id: design
+    policy: autonomous
+    required_artifacts:
+      - artifacts/design.md
+    transitions:
+      - on: complete
+        to: implement
+    agents: []
+  - id: implement
+    agents: []
+"""
+
+
+def _observer_workflow() -> str:
+    return """
+version: 1
+name: observer
+work_type: dev
+defaults:
+  provider: fake
+phases:
+  - id: design
+    policy: observer
+    agents: []
+"""
+
+
 def _gated_workflow() -> str:
     return """
 version: 1
@@ -364,6 +399,95 @@ def test_flow_execute_rejects_missing_agent(tmp_path: Path) -> None:
 
     assert result.exit_code != 0
     assert "no rendered agent" in _plain(result.output)
+
+
+def test_flow_execute_observer_policy_can_be_forced(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "observer", _observer_workflow())
+    start = runner.invoke(
+        app,
+        ["flow", "start", "feat", "--root", str(tmp_path), "--workflow", "observer"],
+    )
+    assert start.exit_code == 0, start.output
+
+    blocked = runner.invoke(app, ["flow", "execute", "feat", "--root", str(tmp_path)])
+    forced = runner.invoke(
+        app,
+        ["flow", "execute", "feat", "--root", str(tmp_path), "--force-policy"],
+    )
+
+    assert blocked.exit_code != 0
+    assert "Observer policy" in _plain(blocked.output)
+    assert forced.exit_code == 0, forced.output
+
+
+def test_flow_artifacts_command_reports_missing_and_present_artifacts(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "artifact", _artifact_workflow())
+    start = runner.invoke(
+        app,
+        ["flow", "start", "feat", "--root", str(tmp_path), "--workflow", "artifact"],
+    )
+    assert start.exit_code == 0, start.output
+
+    missing = runner.invoke(app, ["flow", "artifacts", "feat", "--root", str(tmp_path)])
+    artifact_path = tmp_path / "_wt" / "feat" / ".pal" / "artifacts" / "design.md"
+    artifact_path.parent.mkdir(parents=True)
+    artifact_path.write_text("ok\n", encoding="utf-8")
+    present = runner.invoke(app, ["flow", "artifacts", "feat", "--root", str(tmp_path)])
+
+    assert missing.exit_code == 1
+    assert "artifacts/design.md" in missing.output
+    assert present.exit_code == 0, present.output
+    assert "yes" in present.output
+
+
+def test_flow_artifacts_command_reports_no_required_artifacts(tmp_path: Path) -> None:
+    start = runner.invoke(app, ["flow", "start", "feat", "--root", str(tmp_path)])
+    assert start.exit_code == 0, start.output
+
+    result = runner.invoke(app, ["flow", "artifacts", "feat", "--root", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "(no required artifacts)" in result.output
+
+
+def test_flow_advance_enforces_artifacts_and_accepts_force(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "artifact", _artifact_workflow())
+    start = runner.invoke(
+        app,
+        ["flow", "start", "feat", "--root", str(tmp_path), "--workflow", "artifact"],
+    )
+    assert start.exit_code == 0, start.output
+
+    blocked = runner.invoke(app, ["flow", "advance", "feat", "--root", str(tmp_path)])
+    forced = runner.invoke(
+        app,
+        ["flow", "advance", "feat", "--root", str(tmp_path), "--force-artifacts"],
+    )
+
+    assert blocked.exit_code != 0
+    assert "missing required artifacts" in _plain(blocked.output)
+    assert forced.exit_code == 0, forced.output
+    assert "implement" in forced.output
+
+
+def test_flow_run_command_stops_on_policy_and_can_force_artifacts(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "artifact", _artifact_workflow())
+    start = runner.invoke(
+        app,
+        ["flow", "start", "feat", "--root", str(tmp_path), "--workflow", "artifact"],
+    )
+    assert start.exit_code == 0, start.output
+
+    missing = runner.invoke(app, ["flow", "run", "feat", "--root", str(tmp_path)])
+    forced = runner.invoke(
+        app,
+        ["flow", "run", "feat", "--root", str(tmp_path), "--force-artifacts", "--max-phases", "1"],
+    )
+
+    assert missing.exit_code == 0, missing.output
+    assert "missing_artifacts" in missing.output
+    assert forced.exit_code == 0, forced.output
+    assert "max_phases" in forced.output
 
 
 def test_flow_advance_default_run_updates_phase(tmp_path: Path) -> None:

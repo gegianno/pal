@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from pal.config import load_config
+from pal.config import PalConfig, _apply_dict, load_config
 from pal.cli import app
 
 try:
@@ -108,6 +108,52 @@ def test_load_config_parses_claude_section(tmp_path: Path) -> None:
     assert cfg.claude.add_dirs == ["/tmp/a"]
     assert cfg.claude.extra_args == ["--foo", "bar"]
     assert cfg.claude.allow_bypass_permissions is True
+
+
+def test_load_config_parses_flow_hooks(tmp_path: Path) -> None:
+    (tmp_path / ".pal.toml").write_text(
+        (
+            'root = "."\n\n'
+            "[[flow.hooks]]\n"
+            'name = "notify"\n'
+            'command = ["osascript", "-e", "display notification"]\n'
+            'events = ["flow.phase.execution.failed"]\n'
+            "\n"
+            "[[flow.hooks]]\n"
+            'command = ["echo", "all"]\n'
+            "\n"
+            "[[flow.hooks]]\n"
+            'name = "ignored"\n'
+            'command = "not-a-list"\n'
+        ),
+        encoding="utf-8",
+    )
+
+    cfg = load_config(root=tmp_path, cli_overrides={"root": str(tmp_path)})
+
+    assert [hook.name for hook in cfg.flow.hooks] == ["notify", "hook-2"]
+    assert cfg.flow.hooks[0].command == ["osascript", "-e", "display notification"]
+    assert cfg.flow.hooks[0].events == ["flow.phase.execution.failed"]
+    assert cfg.flow.hooks[1].events == ["*"]
+
+
+def test_apply_dict_ignores_non_dict_flow_hook_entries(tmp_path: Path) -> None:
+    cfg = PalConfig(root=tmp_path, worktree_root=tmp_path / "_wt")
+
+    _apply_dict(cfg, {"flow": {"hooks": ["not-a-dict"]}})
+
+    assert cfg.flow.hooks == []
+
+
+def test_load_config_ignores_non_list_flow_hooks(tmp_path: Path) -> None:
+    (tmp_path / ".pal.toml").write_text(
+        'root = "."\n\n[flow]\nhooks = "invalid"\n',
+        encoding="utf-8",
+    )
+
+    cfg = load_config(root=tmp_path, cli_overrides={"root": str(tmp_path)})
+
+    assert cfg.flow.hooks == []
 
 
 def test_rm_removes_empty_feature_dir(tmp_path: Path) -> None:

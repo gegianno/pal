@@ -59,6 +59,18 @@ class LocalFilesConfig:
 
 
 @dataclass
+class FlowHookConfig:
+    name: str
+    command: list[str]
+    events: list[str] = field(default_factory=lambda: ["*"])
+
+
+@dataclass
+class FlowConfig:
+    hooks: list[FlowHookConfig] = field(default_factory=list)
+
+
+@dataclass
 class PalConfig:
     root: Path
     worktree_root: Path
@@ -69,6 +81,7 @@ class PalConfig:
     codex: CodexConfig = field(default_factory=CodexConfig)
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)
     local_files: LocalFilesConfig = field(default_factory=LocalFilesConfig)
+    flow: FlowConfig = field(default_factory=FlowConfig)
 
     @property
     def local_config_path(self) -> Path:
@@ -228,3 +241,26 @@ def _apply_dict(cfg: PalConfig, d: dict[str, Any]) -> None:
                         repo_cfg.patterns = [str(x) for x in value["patterns"]]
                     parsed[str(repo_name)] = repo_cfg
             cfg.local_files.repos = parsed
+
+    flow = d.get("flow")
+    if isinstance(flow, dict):
+        hooks = flow.get("hooks")
+        if isinstance(hooks, list):
+            parsed_hooks: list[FlowHookConfig] = []
+            for index, hook in enumerate(hooks):
+                if not isinstance(hook, dict):
+                    continue
+                command = hook.get("command")
+                if not isinstance(command, list):
+                    continue
+                events = hook.get("events", ["*"])
+                parsed_hooks.append(
+                    FlowHookConfig(
+                        name=str(hook.get("name", f"hook-{index + 1}")),
+                        command=[str(part) for part in command],
+                        events=[str(event) for event in events]
+                        if isinstance(events, list)
+                        else ["*"],
+                    )
+                )
+            cfg.flow.hooks = parsed_hooks

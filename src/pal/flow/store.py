@@ -32,6 +32,9 @@ class LocalFlowStore:
     def events_path(self, feature: str, run_id: str) -> Path:
         return self.run_dir(feature, run_id) / "events.jsonl"
 
+    def hooks_path(self, feature: str, run_id: str) -> Path:
+        return self.run_dir(feature, run_id) / "hooks.jsonl"
+
     def latest_output_dir(self, feature: str, run_id: str) -> Path:
         return self.run_dir(feature, run_id) / "latest"
 
@@ -174,3 +177,16 @@ class LocalFlowStore:
     def read_events(self, feature: str, run_id: str | None = None) -> list[FlowEvent]:
         resolved_run_id = self.resolve_run_id(feature, run_id)
         return FlowEventLog(self.events_path(feature, resolved_run_id)).read()
+
+    def append_hook_result(self, run: FlowRun, result: dict[str, object]) -> None:
+        path = self.hooks_path(run.feature, run.run_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(result, sort_keys=True) + "\n")
+
+    def read_hook_results(self, feature: str, run_id: str | None = None) -> list[object]:
+        resolved_run_id = self.resolve_run_id(feature, run_id)
+        path = self.hooks_path(feature, resolved_run_id)
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]

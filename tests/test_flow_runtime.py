@@ -10,7 +10,15 @@ from pal.flow.store import LocalFlowStore
 
 def test_build_local_flow_service_wires_store_and_fake_provider(tmp_path: Path) -> None:
     service = build_local_flow_service(
-        SimpleNamespace(root=tmp_path, worktree_root=tmp_path / "_wt")
+        SimpleNamespace(
+            root=tmp_path,
+            worktree_root=tmp_path / "_wt",
+            flow=SimpleNamespace(
+                hooks=[
+                    SimpleNamespace(name="notify", command=["echo", "ok"], events=["*"]),
+                ]
+            ),
+        )
     )
 
     assert isinstance(service.store, LocalFlowStore)
@@ -18,3 +26,4 @@ def test_build_local_flow_service_wires_store_and_fake_provider(tmp_path: Path) 
     assert service.provider_names() == ["claude", "codex", "fake"]
     assert service.store.worktree_root == tmp_path / "_wt"
     assert service.workflow_paths() == []
+    assert service.hooks.hooks[0].name == "notify"

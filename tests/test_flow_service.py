@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from pal.flow.hooks import FlowHook, FlowHookDispatcher, HookCommandResult
 from pal.flow.models import FlowPhase, FlowStatus
 from pal.flow.providers.base import ProviderLaunchRequest, ProviderLaunchResult
 from pal.flow.providers.fake import FakeFlowProvider
@@ -32,6 +33,14 @@ class FailingFlowProvider(FakeFlowProvider):
         )
 
 
+class RecordingHookRunner:
+    def run(self, command, *, cwd=None, env=None, timeout=None):  # noqa: ANN001, ANN201
+        return HookCommandResult(
+            returncode=0,
+            stdout=f"{command[0]}:{env['PAL_FLOW_EVENT_TYPE']}:{timeout}\n",
+        )
+
+
 def _write_workflow(root: Path, name: str, body: str) -> Path:
     path = root / ".pal" / "flows" / f"{name}.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -44,6 +53,7 @@ def _workflow_body(
     provider: str = "fake",
     requirement: str = "local_headless",
     agent_provider: str = "",
+    design_policy: str = "co-driver",
     design_required_artifact: bool = False,
     design_requires_approval: bool = False,
     implement_blocked_transition: bool = False,
@@ -69,7 +79,7 @@ defaults:
   provider: {provider}
 phases:
   - id: design
-    policy: co-driver
+    policy: {design_policy}
 {required_artifact_lines}{approval_line}    transitions:
       - on: complete
         to: implement
@@ -80,6 +90,21 @@ phases:
           - {requirement}
   - id: implement
 {transition_lines}    agents: []
+"""
+
+
+def _single_phase_workflow(*, policy: str = "autonomous", approval: bool = False) -> str:
+    approval_line = "    requires_approval: true\n" if approval else ""
+    return f"""
+version: 1
+name: single
+work_type: dev
+defaults:
+  provider: fake
+phases:
+  - id: design
+    policy: {policy}
+{approval_line}    agents: []
 """
 
 
@@ -126,6 +151,26 @@ def test_flow_service_start_persists_run_and_provider_events(tmp_path: Path) -> 
     assert events[1].actor == "fake"
     assert events[1].payload["summary"] == "fake provider initialized run run_test"
     assert service.events("feat", "run_test") == events
+
+
+def test_flow_service_dispatches_configured_hooks_for_events(tmp_path: Path) -> None:
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        hooks=FlowHookDispatcher(
+            hooks=[FlowHook(name="notify", command=["notify"])],
+            runner=RecordingHookRunner(),
+            timeout=7,
+        ),
+        clock=lambda: "2026-04-27T00:00:00Z",
+    )
+
+    run = service.start(feature="feat", repos=[])
+
+    results = service.hook_results("feat", run.run_id)
+    assert len(results) == 2
+    assert results[0]["hook"] == "notify"
+    assert results[0]["stdout"] == "notify:flow.run.started:7\n"
 
 
 def test_flow_service_provider_registry_and_preflight(tmp_path: Path) -> None:
@@ -374,6 +419,49 @@ def test_flow_service_render_phase_filters_provider_and_rejects_unknown_provider
         service.render_phase("feat", provider_name="missing")
 
 
+def test_flow_service_checks_artifacts_and_advance_enforces_required_artifacts(
+    tmp_path: Path,
+) -> None:
+    _write_workflow(tmp_path, "dev-complex", _workflow_body(design_required_artifact=True))
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+    run = service.start(feature="feat", repos=[], workflow="dev-complex")
+
+    missing = service.check_artifacts("feat")
+
+    assert missing.valid is False
+    assert missing.missing[0].name == "artifacts/design.md"
+    assert service.events("feat")[-1].type == "flow.artifacts.checked"
+    with pytest.raises(ValueError, match="missing required artifacts"):
+        service.advance("feat")
+
+    Path(run.artifact_root).mkdir(parents=True, exist_ok=True)
+    (Path(run.artifact_root) / "design.md").write_text("ok\n", encoding="utf-8")
+    valid = service.check_artifacts("feat")
+    advanced = service.advance("feat")
+
+    assert valid.valid is True
+    assert advanced.current_phase == FlowPhase.IMPLEMENT
+
+
+def test_flow_service_advance_can_force_missing_artifacts(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "dev-complex", _workflow_body(design_required_artifact=True))
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+    service.start(feature="feat", repos=[], workflow="dev-complex")
+
+    advanced = service.advance("feat", force_artifacts=True)
+
+    assert advanced.current_phase == FlowPhase.IMPLEMENT
+    assert service.events("feat")[-1].payload["force_artifacts"] is True
+
+
 def test_flow_service_execute_phase_runs_rendered_agents_and_records_artifacts(
     tmp_path: Path,
 ) -> None:
@@ -507,6 +595,25 @@ def test_flow_service_execute_phase_records_failed_execution_without_mutating_ru
     assert service.events("feat")[-1].type == "flow.phase.execution.failed"
 
 
+def test_flow_service_execute_phase_respects_observer_policy(tmp_path: Path) -> None:
+    _write_workflow(
+        tmp_path,
+        "observer",
+        _workflow_body(design_policy="observer"),
+    )
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+    service.start(feature="feat", repos=[], workflow="observer")
+
+    with pytest.raises(ValueError, match="Observer policy"):
+        service.execute_phase("feat")
+
+    assert service.execute_phase("feat", force_policy=True).status == "completed"
+
+
 def test_flow_service_execute_phase_rejects_completed_runs_and_unknown_provider(
     tmp_path: Path,
 ) -> None:
@@ -521,6 +628,135 @@ def test_flow_service_execute_phase_rejects_completed_runs_and_unknown_provider(
         service.execute_phase("feat")
     with pytest.raises(ValueError, match="Unknown provider"):
         service.execute_phase("feat", provider_name="missing")
+
+
+def test_flow_service_run_flow_stops_before_observer_execution(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "observer", _workflow_body(design_policy="observer"))
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+    service.start(feature="feat", repos=[], workflow="observer")
+
+    summary = service.run_flow("feat")
+
+    assert summary.status == "observer_stopped"
+    assert summary.steps[0].status == "observer_stopped"
+    assert summary.to_dict()["steps"][0]["policy"] == "observer"
+    assert service.events("feat")[-1].type == "flow.run_loop.observer_stopped"
+
+
+def test_flow_service_run_flow_stops_for_supervisor_policy(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "supervisor", _workflow_body(design_policy="supervisor"))
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+    service.start(feature="feat", repos=[], workflow="supervisor")
+
+    summary = service.run_flow("feat")
+
+    assert summary.status == "waiting_human"
+    assert summary.steps[0].status == "waiting_human"
+    assert summary.steps[0].execution.status == "completed"
+    assert summary.steps[0].artifacts.valid is True
+
+
+def test_flow_service_run_flow_can_auto_advance_co_driver_when_explicit(
+    tmp_path: Path,
+) -> None:
+    _write_workflow(tmp_path, "dev-complex", _workflow_body())
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+    service.start(feature="feat", repos=[], workflow="dev-complex")
+
+    stopped = service.run_flow("feat", max_phases=1)
+    advanced = service.run_flow("feat", max_phases=1, co_driver_auto_advance=True)
+
+    assert stopped.status == "waiting_human"
+    assert advanced.status == "max_phases"
+    assert advanced.steps[0].status == "advanced"
+    assert service.status("feat").current_phase == FlowPhase.IMPLEMENT
+
+
+def test_flow_service_run_flow_autonomous_completes_single_phase(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "single", _single_phase_workflow())
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+    service.start(feature="feat", repos=[], workflow="single")
+
+    summary = service.run_flow("feat")
+
+    assert summary.status == "completed"
+    assert summary.run.status == FlowStatus.COMPLETED
+    assert summary.steps[0].advanced_to == FlowPhase.DESIGN
+
+
+def test_flow_service_run_flow_stops_on_missing_artifacts_execution_failure_and_gate(
+    tmp_path: Path,
+) -> None:
+    _write_workflow(
+        tmp_path,
+        "missing-artifact",
+        _workflow_body(design_policy="autonomous", design_required_artifact=True),
+    )
+    missing_service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "missing" / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+    missing_service.start(feature="feat", repos=[], workflow="missing-artifact")
+
+    missing = missing_service.run_flow("feat")
+
+    assert missing.status == "missing_artifacts"
+    assert missing.steps[0].artifacts.valid is False
+
+    failing_service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "failing" / "_wt"),
+        providers={"failing": FailingFlowProvider()},
+        default_provider="failing",
+    )
+    failing_service.start(feature="feat", repos=[], provider_name="failing")
+
+    failed = failing_service.run_flow("feat")
+
+    assert failed.status == "failed"
+    assert failed.steps[0].status == "execution_failed"
+
+    _write_workflow(tmp_path, "approval", _single_phase_workflow(approval=True))
+    gated_service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "gated" / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+    gated_service.start(feature="feat", repos=[], workflow="approval")
+
+    gated = gated_service.run_flow("feat")
+
+    assert gated.status == "waiting_approval"
+    assert gated.steps[0].status == "waiting_approval"
+
+
+def test_flow_service_run_flow_validates_limits_and_unknown_provider(tmp_path: Path) -> None:
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+    )
+    service.start(feature="feat", repos=[])
+
+    with pytest.raises(ValueError, match="max_phases"):
+        service.run_flow("feat", max_phases=0)
+    with pytest.raises(ValueError, match="Unknown provider"):
+        service.run_flow("feat", provider_name="missing")
 
 
 def test_flow_service_advances_default_phase_order_and_completes(tmp_path: Path) -> None:

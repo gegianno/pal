@@ -124,6 +124,18 @@ def test_store_writes_phase_execution_artifacts(tmp_path: Path) -> None:
     assert parsed["paths"] == paths
 
 
+def test_store_writes_and_reads_hook_results(tmp_path: Path) -> None:
+    store = LocalFlowStore(tmp_path / "_wt")
+    run = _run()
+    store.create_run(run)
+
+    assert store.read_hook_results("feat") == []
+    store.append_hook_result(run, {"hook": "notify", "returncode": 0})
+
+    assert store.hooks_path("feat", "run_1") == store.run_dir("feat", "run_1") / "hooks.jsonl"
+    assert store.read_hook_results("feat") == [{"hook": "notify", "returncode": 0}]
+
+
 def test_store_save_state_updates_existing_run(tmp_path: Path) -> None:
     store = LocalFlowStore(tmp_path / "_wt")
     run = _run()

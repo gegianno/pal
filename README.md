@@ -147,6 +147,8 @@ pal flow validate dev-complex
 pal flow start feat-auth --workflow dev-complex
 pal flow render feat-auth
 pal flow execute feat-auth
+pal flow artifacts feat-auth
+pal flow run feat-auth
 pal flow approve feat-auth
 pal flow advance feat-auth
 pal flow block feat-auth --reason "implementation hit a dependency issue"
@@ -173,6 +175,29 @@ selected provider's local headless adapter, and records per-agent prompts, stdou
 manifests under `.pal/runs/<run-id>/phase/<phase>/executions/<execution-id>/`. Execution records are
 durable, but V1 execution does not auto-advance the workflow; `approve`, `advance`, `block`, and
 `replan` remain explicit state changes.
+
+`pal flow artifacts <feature>` validates the current phase's `required_artifacts`. Relative artifact
+paths resolve under `.pal/artifacts`; an `artifacts/...` prefix is accepted and normalized there too.
+`pal flow advance` refuses to complete a phase with missing required artifacts unless
+`--force-artifacts` is passed.
+
+`pal flow run <feature>` is the policy-aware phase loop:
+
+- `observer`: renders the phase and stops before execution.
+- `supervisor`: executes and validates artifacts, then waits for explicit human advance.
+- `co-driver`: behaves like `supervisor` unless `--co-driver-auto-advance` is passed.
+- `autonomous`: executes, validates artifacts, and advances until completion, a gate, a failure, a
+  missing artifact, or `--max-phases`.
+
+Local hooks can be configured in `.pal.toml` and run after matching flow events. Hook results are
+recorded in `.pal/runs/<run-id>/hooks.jsonl`; hook failures do not fail the flow command.
+
+```toml
+[[flow.hooks]]
+name = "notify-failure"
+command = ["osascript", "-e", "display notification \"pal flow failed\""]
+events = ["flow.phase.execution.failed"]
+```
 
 ---
 
@@ -302,8 +327,10 @@ pal flow validate [workflow]
 pal flow start <feature> [--workflow workflow]
 pal flow render <feature>
 pal flow execute <feature>
+pal flow artifacts <feature>
+pal flow run <feature>
 pal flow approve <feature>
-pal flow advance <feature>
+pal flow advance <feature> [--force-artifacts]
 pal flow block <feature> --reason <reason>
 pal flow replan <feature>
 pal flow status <feature>
