@@ -239,6 +239,41 @@ def flow_render(
     )
 
 
+@flow_app.command("execute")
+def flow_execute(
+    feature: str = typer.Argument(..., help="Feature workspace name."),
+    provider: Optional[str] = typer.Option(None, "--provider", help="Provider execution filter."),
+    agent: Optional[str] = typer.Option(None, "--agent", help="Single rendered agent ID to run."),
+    run_id: Optional[str] = typer.Option(None, "--run-id", help="Run ID. Defaults to latest."),
+    root: Path = typer.Option(Path("."), "--root", "-r"),
+    worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
+    branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
+) -> None:
+    """Execute the current phase brief through local headless providers."""
+    service = _service_from_options(root, worktree_root, branch_prefix)
+    summary = _change_or_error(
+        service,
+        "execute_phase",
+        feature,
+        run_id=run_id,
+        provider_name=provider or "",
+        agent_id=agent or "",
+    )
+    manifests = (
+        "\n".join(execution.paths["manifest"] for execution in summary.executions) or "(none)"
+    )
+    console.print(
+        Panel.fit(
+            f"run_id: {summary.run.run_id}\n"
+            f"phase: {summary.phase.value}\n"
+            f"status: {summary.status}\n"
+            f"executions: {len(summary.executions)}\n"
+            f"manifests:\n{manifests}",
+            title="pal flow executed",
+        )
+    )
+
+
 @flow_app.command("approve")
 def flow_approve(
     feature: str = typer.Argument(..., help="Feature workspace name."),

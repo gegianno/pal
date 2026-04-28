@@ -146,6 +146,7 @@ pal flow providers
 pal flow validate dev-complex
 pal flow start feat-auth --workflow dev-complex
 pal flow render feat-auth
+pal flow execute feat-auth
 pal flow approve feat-auth
 pal flow advance feat-auth
 pal flow block feat-auth --reason "implementation hit a dependency issue"
@@ -166,6 +167,12 @@ inside agent output.
 `.pal/runs/<run-id>/phase/<phase>/brief.md` and `brief.json` artifacts. The brief includes run
 state, the active policy, resolved phase agents, required artifacts, recent events, approvals,
 blockers, and small provider-specific guidance for the selected provider.
+
+`pal flow execute <feature>` renders the current phase, runs each rendered phase agent through the
+selected provider's local headless adapter, and records per-agent prompts, stdout/stderr logs, and
+manifests under `.pal/runs/<run-id>/phase/<phase>/executions/<execution-id>/`. Execution records are
+durable, but V1 execution does not auto-advance the workflow; `approve`, `advance`, `block`, and
+`replan` remain explicit state changes.
 
 ---
 
@@ -293,6 +300,8 @@ pal implement <feature> <agent> [agent args...]
 pal flow providers
 pal flow validate [workflow]
 pal flow start <feature> [--workflow workflow]
+pal flow render <feature>
+pal flow execute <feature>
 pal flow approve <feature>
 pal flow advance <feature>
 pal flow block <feature> --reason <reason>

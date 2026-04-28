@@ -99,6 +99,31 @@ def test_store_writes_phase_brief_artifacts(tmp_path: Path) -> None:
     assert parsed["paths"] == paths
 
 
+def test_store_writes_phase_execution_artifacts(tmp_path: Path) -> None:
+    store = LocalFlowStore(tmp_path / "_wt")
+    run = _run()
+    store.create_run(run)
+
+    paths = store.write_phase_execution(
+        run,
+        phase="explore",
+        execution_id="exec_1",
+        prompt="# Prompt\n",
+        stdout="ok\n",
+        stderr="warn\n",
+        manifest={"execution_id": "exec_1", "status": "completed"},
+    )
+
+    execution_dir = store.phase_execution_dir("feat", "run_1", "explore", "exec_1")
+    assert execution_dir == store.phase_dir("feat", "run_1", "explore") / "executions" / "exec_1"
+    assert Path(paths["prompt"]).read_text(encoding="utf-8") == "# Prompt\n"
+    assert Path(paths["stdout"]).read_text(encoding="utf-8") == "ok\n"
+    assert Path(paths["stderr"]).read_text(encoding="utf-8") == "warn\n"
+    parsed = json.loads(Path(paths["manifest"]).read_text(encoding="utf-8"))
+    assert parsed["execution_id"] == "exec_1"
+    assert parsed["paths"] == paths
+
+
 def test_store_save_state_updates_existing_run(tmp_path: Path) -> None:
     store = LocalFlowStore(tmp_path / "_wt")
     run = _run()

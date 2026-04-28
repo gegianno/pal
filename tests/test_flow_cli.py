@@ -310,6 +310,62 @@ def test_flow_render_rejects_unknown_provider(tmp_path: Path) -> None:
     assert "Unknown provider" in _plain(result.output)
 
 
+def test_flow_execute_runs_phase_and_writes_execution_manifest(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "dev-complex", _valid_workflow())
+    start = runner.invoke(
+        app,
+        ["flow", "start", "feat", "--root", str(tmp_path), "--workflow", "dev-complex"],
+    )
+    assert start.exit_code == 0, start.output
+
+    result = runner.invoke(
+        app,
+        [
+            "flow",
+            "execute",
+            "feat",
+            "--root",
+            str(tmp_path),
+            "--provider",
+            "fake",
+            "--agent",
+            "designer",
+        ],
+    )
+
+    store = LocalFlowStore(tmp_path / "_wt")
+    run_id = store.latest_run_id("feat")
+    execution_root = store.phase_dir("feat", run_id, "design") / "executions"
+    manifests = list(execution_root.glob("*/manifest.json"))
+    assert result.exit_code == 0, result.output
+    assert "pal flow executed" in result.output
+    assert "completed" in result.output
+    assert "manifest.json" in result.output
+    assert len(manifests) == 1
+    assert _event_types(tmp_path, "feat")[-3:] == [
+        "flow.phase.rendered",
+        "flow.phase.execution.started",
+        "flow.phase.execution.completed",
+    ]
+
+
+def test_flow_execute_rejects_missing_agent(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "dev-complex", _valid_workflow())
+    start = runner.invoke(
+        app,
+        ["flow", "start", "feat", "--root", str(tmp_path), "--workflow", "dev-complex"],
+    )
+    assert start.exit_code == 0, start.output
+
+    result = runner.invoke(
+        app,
+        ["flow", "execute", "feat", "--root", str(tmp_path), "--agent", "missing"],
+    )
+
+    assert result.exit_code != 0
+    assert "no rendered agent" in _plain(result.output)
+
+
 def test_flow_advance_default_run_updates_phase(tmp_path: Path) -> None:
     start = runner.invoke(
         app,

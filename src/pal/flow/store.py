@@ -41,6 +41,15 @@ class LocalFlowStore:
     def phase_dir(self, feature: str, run_id: str, phase: str) -> Path:
         return self.run_dir(feature, run_id) / "phase" / phase
 
+    def phase_execution_dir(
+        self,
+        feature: str,
+        run_id: str,
+        phase: str,
+        execution_id: str,
+    ) -> Path:
+        return self.phase_dir(feature, run_id, phase) / "executions" / execution_id
+
     def create_run(self, run: FlowRun) -> None:
         run_dir = self.run_dir(run.feature, run.run_id)
         run_dir.mkdir(parents=True, exist_ok=False)
@@ -104,6 +113,38 @@ class LocalFlowStore:
         markdown_path.write_text(markdown, encoding="utf-8")
         json_path.write_text(
             json.dumps(data_with_paths, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        return paths
+
+    def write_phase_execution(
+        self,
+        run: FlowRun,
+        *,
+        phase: str,
+        execution_id: str,
+        prompt: str,
+        stdout: str,
+        stderr: str,
+        manifest: dict[str, object],
+    ) -> dict[str, str]:
+        execution_dir = self.phase_execution_dir(run.feature, run.run_id, phase, execution_id)
+        execution_dir.mkdir(parents=True, exist_ok=True)
+        prompt_path = execution_dir / "prompt.md"
+        stdout_path = execution_dir / "stdout.log"
+        stderr_path = execution_dir / "stderr.log"
+        manifest_path = execution_dir / "manifest.json"
+        paths = {
+            "prompt": str(prompt_path),
+            "stdout": str(stdout_path),
+            "stderr": str(stderr_path),
+            "manifest": str(manifest_path),
+        }
+        prompt_path.write_text(prompt, encoding="utf-8")
+        stdout_path.write_text(stdout, encoding="utf-8")
+        stderr_path.write_text(stderr, encoding="utf-8")
+        manifest_path.write_text(
+            json.dumps({**manifest, "paths": paths}, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
         return paths

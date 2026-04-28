@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from pal.flow.models import FlowPhase, FlowStatus
+from pal.flow.providers.base import ProviderLaunchRequest, ProviderLaunchResult
 from pal.flow.providers.fake import FakeFlowProvider
 from pal.flow.service import LocalFlowService, default_policies
 from pal.flow.store import LocalFlowStore
@@ -13,6 +14,22 @@ from pal.flow.workflows.library import LocalWorkflowLibrary, WorkflowSpecError
 
 def _ids() -> list[str]:
     return ["run_test", "evt_started", "evt_provider", "session_test", "evt_completed"]
+
+
+class FailingFlowProvider(FakeFlowProvider):
+    name = "failing"
+
+    def launch_headless(self, request: ProviderLaunchRequest) -> ProviderLaunchResult:
+        return ProviderLaunchResult(
+            provider=self.name,
+            execution_mode="local_headless",
+            command=["failing-flow-provider", request.prompt],
+            cwd=str(request.workspace_dir),
+            status="failed",
+            returncode=9,
+            stdout="",
+            stderr="failed\n",
+        )
 
 
 def _write_workflow(root: Path, name: str, body: str) -> Path:
@@ -355,6 +372,155 @@ def test_flow_service_render_phase_filters_provider_and_rejects_unknown_provider
     assert list(brief.provider_guidance) == ["fake"]
     with pytest.raises(ValueError, match="Unknown provider"):
         service.render_phase("feat", provider_name="missing")
+
+
+def test_flow_service_execute_phase_runs_rendered_agents_and_records_artifacts(
+    tmp_path: Path,
+) -> None:
+    ids = [
+        "run_exec",
+        "evt_started",
+        "evt_provider",
+        "evt_rendered",
+        "evt_execution_started",
+        "exec_designer",
+        "evt_execution_completed",
+    ]
+    store = LocalFlowStore(tmp_path / "_wt")
+    _write_workflow(
+        tmp_path,
+        "dev-complex",
+        _workflow_body(design_required_artifact=True),
+    )
+    service = LocalFlowService(
+        store=store,
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+        clock=lambda: "2026-04-27T00:00:00Z",
+        id_factory=lambda _prefix: ids.pop(0),
+    )
+    run = service.start(feature="feat", repos=[], workflow="dev-complex")
+
+    summary = service.execute_phase("feat")
+
+    assert summary.status == "completed"
+    assert summary.to_dict()["brief_paths"] == summary.brief.paths
+    assert len(summary.executions) == 1
+    execution = summary.executions[0]
+    assert execution.execution_id == "exec_designer"
+    assert execution.target.agent_id == "designer"
+    assert execution.paths == {
+        "prompt": str(
+            store.phase_execution_dir("feat", run.run_id, "design", "exec_designer") / "prompt.md"
+        ),
+        "stdout": str(
+            store.phase_execution_dir("feat", run.run_id, "design", "exec_designer") / "stdout.log"
+        ),
+        "stderr": str(
+            store.phase_execution_dir("feat", run.run_id, "design", "exec_designer") / "stderr.log"
+        ),
+        "manifest": str(
+            store.phase_execution_dir("feat", run.run_id, "design", "exec_designer")
+            / "manifest.json"
+        ),
+    }
+    assert "pal flow execution request" in Path(execution.paths["prompt"]).read_text(
+        encoding="utf-8"
+    )
+    assert (
+        Path(execution.paths["stdout"])
+        .read_text(encoding="utf-8")
+        .startswith("fake provider completed")
+    )
+    manifest = store.read_run_json(
+        "feat",
+        run.run_id,
+        "phase/design/executions/exec_designer/manifest.json",
+    )
+    assert isinstance(manifest, dict)
+    assert manifest["target"]["agent_id"] == "designer"
+    assert manifest["paths"] == execution.paths
+    assert [event.type for event in service.events("feat")][-3:] == [
+        "flow.phase.rendered",
+        "flow.phase.execution.started",
+        "flow.phase.execution.completed",
+    ]
+
+
+def test_flow_service_execute_phase_supports_synthetic_provider_and_agent_filter(
+    tmp_path: Path,
+) -> None:
+    ids = [
+        "run_exec",
+        "evt_started",
+        "evt_provider",
+        "evt_rendered",
+        "evt_execution_started",
+        "exec_phase",
+        "evt_execution_completed",
+        "evt_rendered_missing",
+    ]
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        clock=lambda: "2026-04-27T00:00:00Z",
+        id_factory=lambda _prefix: ids.pop(0),
+    )
+    service.start(feature="feat", repos=[])
+
+    summary = service.execute_phase("feat", provider_name="fake")
+
+    assert summary.status == "completed"
+    assert summary.executions[0].target.agent_id == "phase"
+    assert summary.executions[0].target.synthetic is True
+    with pytest.raises(ValueError, match="no rendered agent"):
+        service.execute_phase("feat", agent_id="missing")
+
+
+def test_flow_service_execute_phase_records_failed_execution_without_mutating_run(
+    tmp_path: Path,
+) -> None:
+    ids = [
+        "run_exec",
+        "evt_started",
+        "evt_provider",
+        "evt_rendered",
+        "evt_execution_started",
+        "exec_failed",
+        "evt_execution_failed",
+    ]
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"failing": FailingFlowProvider()},
+        default_provider="failing",
+        clock=lambda: "2026-04-27T00:00:00Z",
+        id_factory=lambda _prefix: ids.pop(0),
+    )
+    run = service.start(feature="feat", repos=[], provider_name="failing")
+
+    summary = service.execute_phase("feat")
+
+    assert summary.status == "failed"
+    assert summary.executions[0].returncode == 9
+    assert Path(summary.executions[0].paths["stderr"]).read_text(encoding="utf-8") == "failed\n"
+    assert service.status("feat").status == run.status
+    assert service.events("feat")[-1].type == "flow.phase.execution.failed"
+
+
+def test_flow_service_execute_phase_rejects_completed_runs_and_unknown_provider(
+    tmp_path: Path,
+) -> None:
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+    )
+    service.start(feature="feat", repos=[], phase=FlowPhase.SHIP)
+    service.advance("feat")
+
+    with pytest.raises(ValueError, match="completed"):
+        service.execute_phase("feat")
+    with pytest.raises(ValueError, match="Unknown provider"):
+        service.execute_phase("feat", provider_name="missing")
 
 
 def test_flow_service_advances_default_phase_order_and_completes(tmp_path: Path) -> None:

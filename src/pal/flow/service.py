@@ -4,6 +4,13 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Mapping
 
+from .execution import (
+    PhaseExecutionRecord,
+    PhaseExecutionSummary,
+    build_execution_prompt,
+    execution_status,
+    phase_execution_targets,
+)
 from .models import FlowEvent, FlowPhase, FlowPolicy, FlowRun, FlowStatus, new_id, utc_now
 from .providers.base import FlowProvider, ProviderLaunchRequest, ProviderPreflight
 from .rendering import PhaseBrief, build_phase_brief
@@ -277,6 +284,110 @@ class LocalFlowService:
             },
         )
         return rendered
+
+    def execute_phase(
+        self,
+        feature: str,
+        *,
+        run_id: str | None = None,
+        provider_name: str = "",
+        agent_id: str = "",
+    ) -> PhaseExecutionSummary:
+        if provider_name:
+            self.provider(provider_name)
+        run = self.status(feature, run_id)
+        self._ensure_can_mutate(run)
+        brief = self.render_phase(
+            feature,
+            run_id=run.run_id,
+            provider_name=provider_name,
+        )
+        targets = phase_execution_targets(brief, agent_id=agent_id)
+        self._append_event(
+            run,
+            event_type="flow.phase.execution.started",
+            actor="pal",
+            payload={
+                "phase": run.current_phase.value,
+                "targets": [target.to_dict() for target in targets],
+                "brief": dict(brief.paths),
+            },
+        )
+
+        executions: list[PhaseExecutionRecord] = []
+        for target in targets:
+            provider = self.provider(target.provider)
+            execution_id = self.id_factory("exec")
+            prompt = build_execution_prompt(brief, target)
+            execution_dir = self.store.phase_execution_dir(
+                run.feature,
+                run.run_id,
+                run.current_phase.value,
+                execution_id,
+            )
+            started_at = self.clock()
+            launch = provider.launch_headless(
+                ProviderLaunchRequest(
+                    run=run,
+                    workspace_dir=self.store.feature_dir(run.feature),
+                    prompt=prompt,
+                    output_dir=execution_dir,
+                )
+            )
+            ended_at = self.clock()
+            record_without_paths = PhaseExecutionRecord(
+                execution_id=execution_id,
+                phase=run.current_phase,
+                target=target,
+                execution_mode=launch.execution_mode,
+                status=launch.status,
+                returncode=launch.returncode,
+                command=launch.command,
+                cwd=launch.cwd,
+                started_at=started_at,
+                ended_at=ended_at,
+                paths={},
+            )
+            paths = self.store.write_phase_execution(
+                run,
+                phase=run.current_phase.value,
+                execution_id=execution_id,
+                prompt=prompt,
+                stdout=launch.stdout,
+                stderr=launch.stderr,
+                manifest=record_without_paths.to_dict(),
+            )
+            executions.append(
+                PhaseExecutionRecord(
+                    execution_id=execution_id,
+                    phase=run.current_phase,
+                    target=target,
+                    execution_mode=launch.execution_mode,
+                    status=launch.status,
+                    returncode=launch.returncode,
+                    command=launch.command,
+                    cwd=launch.cwd,
+                    started_at=started_at,
+                    ended_at=ended_at,
+                    paths=paths,
+                )
+            )
+
+        status = execution_status(executions)
+        summary = PhaseExecutionSummary(
+            run=run,
+            phase=run.current_phase,
+            status=status,
+            brief=brief,
+            executions=executions,
+        )
+        self._append_event(
+            run,
+            event_type=f"flow.phase.execution.{status}",
+            actor="pal",
+            payload=summary.to_dict(),
+        )
+        return summary
 
     def approve(
         self,
