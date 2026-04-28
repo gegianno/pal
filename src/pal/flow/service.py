@@ -241,11 +241,13 @@ class LocalFlowService:
                     if requirement in capabilities.execution_modes:
                         continue
                     if hasattr(capabilities, requirement):
-                        if not bool(getattr(capabilities, requirement)):
-                            errors.append(
-                                f"Agent '{agent.id}' requires '{requirement}', but provider "
-                                f"'{provider_name}' does not support it."
-                            )
+                        supported = bool(getattr(capabilities, requirement))
+                        if supported:
+                            continue
+                        errors.append(
+                            f"Agent '{agent.id}' requires '{requirement}', but provider "
+                            f"'{provider_name}' does not support it."
+                        )
                         continue
                     errors.append(f"Agent '{agent.id}' has unknown requirement '{requirement}'.")
         return errors
