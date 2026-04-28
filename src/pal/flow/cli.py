@@ -60,6 +60,13 @@ def _start_or_error(service, **kwargs):  # noqa: ANN001, ANN003
         raise typer.BadParameter(str(exc)) from exc
 
 
+def _change_or_error(service, method: str, *args, **kwargs):  # noqa: ANN001, ANN002, ANN003
+    try:
+        return getattr(service, method)(*args, **kwargs)
+    except (FileNotFoundError, ValueError, WorkflowSpecError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
 @flow_app.command("start")
 def flow_start(
     feature: str = typer.Argument(..., help="Feature workspace name."),
@@ -133,6 +140,11 @@ def flow_status(
     if run.workflow_name:
         table.add_row("workflow", run.workflow_name)
         table.add_row("work_type", run.work_type)
+    if run.blocked_reason:
+        table.add_row("blocked_reason", run.blocked_reason)
+    if run.approvals:
+        table.add_row("approvals", ", ".join(sorted(run.approvals)))
+    table.add_row("phase_history", str(len(run.phase_history)))
     table.add_row("repos", ", ".join(run.repos) if run.repos else "(none)")
     table.add_row("artifact_root", run.artifact_root)
     console.print(table)
@@ -196,6 +208,100 @@ def flow_validate(
     console.print(table)
     if any(not result.valid for result in results):
         raise typer.Exit(1)
+
+
+@flow_app.command("approve")
+def flow_approve(
+    feature: str = typer.Argument(..., help="Feature workspace name."),
+    phase: Optional[str] = typer.Option(None, "--phase", help="Phase to approve."),
+    run_id: Optional[str] = typer.Option(None, "--run-id", help="Run ID. Defaults to latest."),
+    root: Path = typer.Option(Path("."), "--root", "-r"),
+    worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
+    branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
+) -> None:
+    """Approve a gated phase so it can advance."""
+    service = _service_from_options(root, worktree_root, branch_prefix)
+    run = _change_or_error(
+        service,
+        "approve",
+        feature,
+        run_id=run_id,
+        phase=_parse_phase(phase) if phase else None,
+    )
+    console.print(
+        Panel.fit(
+            f"run_id: {run.run_id}\nphase: {(phase or run.current_phase.value)}\nstatus: {run.status.value}",
+            title="pal flow approved",
+        )
+    )
+
+
+@flow_app.command("advance")
+def flow_advance(
+    feature: str = typer.Argument(..., help="Feature workspace name."),
+    signal: str = typer.Option("complete", "--on", help="Transition signal."),
+    run_id: Optional[str] = typer.Option(None, "--run-id", help="Run ID. Defaults to latest."),
+    root: Path = typer.Option(Path("."), "--root", "-r"),
+    worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
+    branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
+) -> None:
+    """Advance a run through the workflow state machine."""
+    service = _service_from_options(root, worktree_root, branch_prefix)
+    run = _change_or_error(service, "advance", feature, run_id=run_id, signal=signal)
+    console.print(
+        Panel.fit(
+            f"run_id: {run.run_id}\nphase: {run.current_phase.value}\nstatus: {run.status.value}",
+            title="pal flow advanced",
+        )
+    )
+
+
+@flow_app.command("block")
+def flow_block(
+    feature: str = typer.Argument(..., help="Feature workspace name."),
+    reason: str = typer.Option(..., "--reason", "-m", help="Why the run is blocked."),
+    run_id: Optional[str] = typer.Option(None, "--run-id", help="Run ID. Defaults to latest."),
+    root: Path = typer.Option(Path("."), "--root", "-r"),
+    worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
+    branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
+) -> None:
+    """Mark the current phase as blocked."""
+    service = _service_from_options(root, worktree_root, branch_prefix)
+    run = _change_or_error(service, "block", feature, run_id=run_id, reason=reason)
+    console.print(
+        Panel.fit(
+            f"run_id: {run.run_id}\nphase: {run.current_phase.value}\nstatus: {run.status.value}",
+            title="pal flow blocked",
+        )
+    )
+
+
+@flow_app.command("replan")
+def flow_replan(
+    feature: str = typer.Argument(..., help="Feature workspace name."),
+    phase: Optional[str] = typer.Option(None, "--phase", help="Phase to re-enter."),
+    reason: str = typer.Option("", "--reason", "-m", help="Why replanning is needed."),
+    run_id: Optional[str] = typer.Option(None, "--run-id", help="Run ID. Defaults to latest."),
+    root: Path = typer.Option(Path("."), "--root", "-r"),
+    worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
+    branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
+) -> None:
+    """Clear a block and re-enter a planning phase."""
+    service = _service_from_options(root, worktree_root, branch_prefix)
+    run = _change_or_error(
+        service,
+        "replan",
+        feature,
+        run_id=run_id,
+        phase=_parse_phase(phase) if phase else None,
+        reason=reason,
+    )
+    console.print(
+        Panel.fit(
+            f"run_id: {run.run_id}\nphase: {run.current_phase.value}\nstatus: {run.status.value}",
+            title="pal flow replanned",
+        )
+    )
 
 
 @flow_app.command("watch")

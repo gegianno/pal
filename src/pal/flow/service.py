@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Mapping
 
@@ -8,6 +9,15 @@ from .providers.base import FlowProvider, ProviderLaunchRequest, ProviderPreflig
 from .store import LocalFlowStore
 from .workflows.library import LocalWorkflowLibrary, WorkflowSpecError
 from .workflows.models import WorkflowSpec, WorkflowValidationResult
+
+_DEFAULT_PHASE_ORDER = [
+    FlowPhase.EXPLORE,
+    FlowPhase.DESIGN,
+    FlowPhase.IMPLEMENT,
+    FlowPhase.VERIFY,
+    FlowPhase.REVIEW,
+    FlowPhase.SHIP,
+]
 
 
 def default_policies() -> dict[str, FlowPolicy]:
@@ -132,6 +142,14 @@ class LocalFlowService:
             updated_at=now,
             workflow_name=workflow_spec.name if workflow_spec else "",
             work_type=workflow_spec.work_type if workflow_spec else "",
+            phase_history=[
+                {
+                    "phase": selected_phase.value,
+                    "entered_at": now,
+                    "actor": "pal",
+                    "reason": "start",
+                }
+            ],
         )
         self.store.feature_dir(feature).mkdir(parents=True, exist_ok=True)
         self.store.create_run(run)
@@ -219,6 +237,182 @@ class LocalFlowService:
     def events(self, feature: str, run_id: str | None = None) -> list[FlowEvent]:
         return self.store.read_events(feature, run_id)
 
+    def approve(
+        self,
+        feature: str,
+        *,
+        run_id: str | None = None,
+        phase: FlowPhase | None = None,
+        actor: str = "human",
+    ) -> FlowRun:
+        run = self.status(feature, run_id)
+        workflow = self._stored_workflow(run)
+        target_phase = phase or run.current_phase
+        if not self._phase_requires_approval(workflow, target_phase):
+            raise ValueError(f"Phase '{target_phase.value}' does not require approval.")
+        now = self.clock()
+        updated = replace(
+            run,
+            approvals={**run.approvals, target_phase.value: now},
+            updated_at=now,
+        )
+        self.store.save_state(updated)
+        self._append_event(
+            updated,
+            event_type="flow.phase.approved",
+            actor=actor,
+            payload={"phase": target_phase.value, "approved_at": now},
+        )
+        return updated
+
+    def advance(
+        self,
+        feature: str,
+        *,
+        run_id: str | None = None,
+        signal: str = "complete",
+        actor: str = "pal",
+    ) -> FlowRun:
+        run = self.status(feature, run_id)
+        self._ensure_can_mutate(run)
+        workflow = self._stored_workflow(run)
+        signal = signal.strip() or "complete"
+        if signal == "complete" and self._approval_required_but_missing(run, workflow):
+            raise ValueError(f"Phase '{run.current_phase.value}' requires approval before advance.")
+
+        target = self._transition_target(run, workflow, signal)
+        now = self.clock()
+        if target is None:
+            updated = replace(
+                run,
+                status=FlowStatus.COMPLETED,
+                updated_at=now,
+                blocked_reason="",
+                blocked_at="",
+                phase_history=[
+                    *run.phase_history,
+                    {
+                        "from": run.current_phase.value,
+                        "to": "",
+                        "on": signal,
+                        "at": now,
+                        "actor": actor,
+                    },
+                ],
+            )
+            self.store.save_state(updated)
+            self._append_event(
+                updated,
+                event_type="flow.run.completed",
+                actor=actor,
+                payload={"phase": run.current_phase.value, "on": signal},
+            )
+            return updated
+
+        updated = replace(
+            run,
+            current_phase=target,
+            status=FlowStatus.RUNNING,
+            updated_at=now,
+            blocked_reason="",
+            blocked_at="",
+            phase_history=[
+                *run.phase_history,
+                {
+                    "from": run.current_phase.value,
+                    "to": target.value,
+                    "on": signal,
+                    "at": now,
+                    "actor": actor,
+                },
+            ],
+        )
+        self.store.save_state(updated)
+        self._append_event(
+            updated,
+            event_type="flow.phase.advanced",
+            actor=actor,
+            payload={"from": run.current_phase.value, "to": target.value, "on": signal},
+        )
+        return updated
+
+    def block(
+        self,
+        feature: str,
+        *,
+        reason: str,
+        run_id: str | None = None,
+        actor: str = "pal",
+    ) -> FlowRun:
+        reason = reason.strip()
+        if not reason:
+            raise ValueError("Block reason is required.")
+        run = self.status(feature, run_id)
+        self._ensure_can_mutate(run, allow_blocked=True)
+        now = self.clock()
+        updated = replace(
+            run,
+            status=FlowStatus.BLOCKED,
+            blocked_reason=reason,
+            blocked_at=now,
+            updated_at=now,
+        )
+        self.store.save_state(updated)
+        self._append_event(
+            updated,
+            event_type="flow.phase.blocked",
+            actor=actor,
+            payload={"phase": run.current_phase.value, "reason": reason, "blocked_at": now},
+        )
+        return updated
+
+    def replan(
+        self,
+        feature: str,
+        *,
+        run_id: str | None = None,
+        phase: FlowPhase | None = None,
+        reason: str = "",
+        actor: str = "pal",
+    ) -> FlowRun:
+        run = self.status(feature, run_id)
+        self._ensure_can_mutate(run, allow_blocked=True)
+        workflow = self._stored_workflow(run)
+        target = phase or self._replan_target(run, workflow)
+        now = self.clock()
+        history = list(run.phase_history)
+        if target != run.current_phase:
+            history.append(
+                {
+                    "from": run.current_phase.value,
+                    "to": target.value,
+                    "on": "replan",
+                    "at": now,
+                    "actor": actor,
+                }
+            )
+        updated = replace(
+            run,
+            current_phase=target,
+            status=FlowStatus.RUNNING,
+            blocked_reason="",
+            blocked_at="",
+            updated_at=now,
+            phase_history=history,
+        )
+        self.store.save_state(updated)
+        self._append_event(
+            updated,
+            event_type="flow.phase.replanned",
+            actor=actor,
+            payload={
+                "from": run.current_phase.value,
+                "to": target.value,
+                "reason": reason.strip(),
+            },
+        )
+        return updated
+
     def _workflow_provider_errors(self, spec: WorkflowSpec) -> list[str]:
         errors: list[str] = []
         for provider_name in sorted(spec.referenced_providers(self.default_provider)):
@@ -251,6 +445,72 @@ class LocalFlowService:
                         continue
                     errors.append(f"Agent '{agent.id}' has unknown requirement '{requirement}'.")
         return errors
+
+    def _stored_workflow(self, run: FlowRun) -> WorkflowSpec | None:
+        if not run.workflow_name:
+            return None
+        data = self.store.read_run_json(run.feature, run.run_id, "workflow.json")
+        if not isinstance(data, dict):
+            raise ValueError(f"Stored workflow metadata is invalid for run '{run.run_id}'.")
+        return WorkflowSpec.from_run_dict(data)
+
+    def _phase_requires_approval(
+        self,
+        workflow: WorkflowSpec | None,
+        phase: FlowPhase,
+    ) -> bool:
+        if not workflow:
+            return False
+        return workflow.phase(phase).requires_approval
+
+    def _approval_required_but_missing(
+        self,
+        run: FlowRun,
+        workflow: WorkflowSpec | None,
+    ) -> bool:
+        return (
+            self._phase_requires_approval(workflow, run.current_phase)
+            and run.current_phase.value not in run.approvals
+        )
+
+    def _transition_target(
+        self,
+        run: FlowRun,
+        workflow: WorkflowSpec | None,
+        signal: str,
+    ) -> FlowPhase | None:
+        if workflow:
+            target = workflow.transition_target(run.current_phase, signal)
+            if target or signal == "complete":
+                return target
+            raise ValueError(f"Phase '{run.current_phase.value}' has no transition for '{signal}'.")
+        if signal != "complete":
+            raise ValueError(f"Run '{run.run_id}' has no workflow transition for '{signal}'.")
+        return self._next_default_phase(run.current_phase)
+
+    def _next_default_phase(self, phase: FlowPhase) -> FlowPhase | None:
+        index = _DEFAULT_PHASE_ORDER.index(phase)
+        next_index = index + 1
+        return _DEFAULT_PHASE_ORDER[next_index] if next_index < len(_DEFAULT_PHASE_ORDER) else None
+
+    def _replan_target(
+        self,
+        run: FlowRun,
+        workflow: WorkflowSpec | None,
+    ) -> FlowPhase:
+        if workflow:
+            target = workflow.transition_target(run.current_phase, "blocked")
+            if target:
+                return target
+            phase_ids = [phase.id for phase in workflow.phases]
+            return FlowPhase.DESIGN if FlowPhase.DESIGN in phase_ids else run.current_phase
+        return FlowPhase.DESIGN if run.current_phase != FlowPhase.DESIGN else run.current_phase
+
+    def _ensure_can_mutate(self, run: FlowRun, *, allow_blocked: bool = False) -> None:
+        if run.status == FlowStatus.BLOCKED and allow_blocked:
+            return
+        if run.status != FlowStatus.RUNNING:
+            raise ValueError(f"Run '{run.run_id}' is {run.status.value} and cannot be changed.")
 
     def _append_event(
         self,

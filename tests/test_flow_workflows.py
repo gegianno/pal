@@ -77,6 +77,19 @@ def test_workflow_library_loads_spec_defaults_and_transitions(tmp_path: Path) ->
     assert spec.phases[0].agents[0].to_dict()["produces"] == ["artifacts/explore.md"]
     assert spec.phases[1].requires_approval is True
     assert spec.to_run_dict()["path"] == str(path)
+    assert spec.phase(FlowPhase.EXPLORE).id == FlowPhase.EXPLORE
+    assert spec.phase_after(FlowPhase.EXPLORE) == FlowPhase.DESIGN
+    assert spec.phase_after(FlowPhase.DESIGN) is None
+    assert spec.transition_target(FlowPhase.EXPLORE, "complete") == FlowPhase.DESIGN
+    assert spec.transition_target(FlowPhase.DESIGN, "blocked") is None
+    assert spec.transition_target(FlowPhase.DESIGN, "complete") is None
+    assert LocalWorkflowLibrary(tmp_path).load("dev-complex").to_run_dict() == spec.to_run_dict()
+    assert spec.from_run_dict(spec.to_run_dict()) == spec
+
+    with pytest.raises(ValueError, match="has no phase"):
+        spec.phase(FlowPhase.SHIP)
+    with pytest.raises(ValueError, match="has no phase"):
+        spec.phase_after(FlowPhase.SHIP)
 
 
 def test_workflow_library_loads_yml_files_and_service_default_policy(tmp_path: Path) -> None:
@@ -275,3 +288,10 @@ def test_workflow_validation_result_valid_property() -> None:
 
 def test_workflow_defaults_with_provider_only() -> None:
     assert WorkflowDefaults(provider="codex").to_dict() == {"provider": "codex"}
+
+
+def test_workflow_defaults_from_dict_parses_policy() -> None:
+    defaults = WorkflowDefaults.from_dict({"provider": "claude", "policy": "supervisor"})
+
+    assert defaults.provider == "claude"
+    assert defaults.policy == FlowPolicy.SUPERVISOR

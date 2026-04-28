@@ -25,6 +25,7 @@ class FlowPolicy(str, Enum):
 
 class FlowStatus(str, Enum):
     RUNNING = "running"
+    BLOCKED = "blocked"
     COMPLETED = "completed"
     FAILED = "failed"
     ABORTED = "aborted"
@@ -53,6 +54,10 @@ class FlowRun:
     pr_urls: list[str] = field(default_factory=list)
     workflow_name: str = ""
     work_type: str = ""
+    phase_history: list[dict[str, Any]] = field(default_factory=list)
+    approvals: dict[str, str] = field(default_factory=dict)
+    blocked_reason: str = ""
+    blocked_at: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -69,6 +74,10 @@ class FlowRun:
             "pr_urls": list(self.pr_urls),
             "workflow_name": self.workflow_name,
             "work_type": self.work_type,
+            "phase_history": [dict(item) for item in self.phase_history],
+            "approvals": dict(self.approvals),
+            "blocked_reason": self.blocked_reason,
+            "blocked_at": self.blocked_at,
         }
 
     @classmethod
@@ -90,6 +99,14 @@ class FlowRun:
             pr_urls=[str(url) for url in data.get("pr_urls", [])],
             workflow_name=str(data.get("workflow_name", "")),
             work_type=str(data.get("work_type", "")),
+            phase_history=[
+                dict(item) for item in data.get("phase_history", []) if isinstance(item, dict)
+            ],
+            approvals={
+                str(phase): str(timestamp) for phase, timestamp in data.get("approvals", {}).items()
+            },
+            blocked_reason=str(data.get("blocked_reason", "")),
+            blocked_at=str(data.get("blocked_at", "")),
         )
 
 

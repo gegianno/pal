@@ -26,6 +26,17 @@ class WorkflowAgent:
             "requires": list(self.requires),
         }
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> WorkflowAgent:
+        return cls(
+            id=str(data["id"]),
+            role=str(data["role"]),
+            provider=str(data.get("provider", "")),
+            prompt=str(data.get("prompt", "")),
+            produces=[str(item) for item in data.get("produces", [])],
+            requires=[str(item) for item in data.get("requires", [])],
+        )
+
 
 @dataclass(frozen=True)
 class WorkflowTransition:
@@ -34,6 +45,10 @@ class WorkflowTransition:
 
     def to_dict(self) -> dict[str, str]:
         return {"on": self.on, "to": self.to.value}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> WorkflowTransition:
+        return cls(on=str(data["on"]), to=FlowPhase(str(data["to"])))
 
 
 @dataclass(frozen=True)
@@ -57,6 +72,21 @@ class WorkflowPhase:
             "requires_approval": self.requires_approval,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> WorkflowPhase:
+        return cls(
+            id=FlowPhase(str(data["id"])),
+            policy=FlowPolicy(str(data["policy"])),
+            provider=str(data.get("provider", "")),
+            agents=[WorkflowAgent.from_dict(agent) for agent in data.get("agents", [])],
+            required_artifacts=[str(item) for item in data.get("required_artifacts", [])],
+            transitions=[
+                WorkflowTransition.from_dict(transition)
+                for transition in data.get("transitions", [])
+            ],
+            requires_approval=bool(data.get("requires_approval", False)),
+        )
+
 
 @dataclass(frozen=True)
 class WorkflowDefaults:
@@ -70,6 +100,14 @@ class WorkflowDefaults:
         if self.policy:
             data["policy"] = self.policy.value
         return data
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> WorkflowDefaults:
+        policy = data.get("policy")
+        return cls(
+            provider=str(data.get("provider", "")),
+            policy=FlowPolicy(str(policy)) if policy else None,
+        )
 
 
 @dataclass(frozen=True)
@@ -90,6 +128,30 @@ class WorkflowSpec:
 
     def policies_by_phase(self) -> dict[str, FlowPolicy]:
         return {phase.id.value: phase.policy for phase in self.phases}
+
+    def phase(self, phase_id: FlowPhase) -> WorkflowPhase:
+        for phase in self.phases:
+            if phase.id == phase_id:
+                return phase
+        raise ValueError(f"Workflow '{self.name}' has no phase '{phase_id.value}'.")
+
+    def phase_after(self, phase_id: FlowPhase) -> FlowPhase | None:
+        phase_ids = [phase.id for phase in self.phases]
+        try:
+            index = phase_ids.index(phase_id)
+        except ValueError as exc:
+            raise ValueError(f"Workflow '{self.name}' has no phase '{phase_id.value}'.") from exc
+        next_index = index + 1
+        return phase_ids[next_index] if next_index < len(phase_ids) else None
+
+    def transition_target(self, phase_id: FlowPhase, signal: str) -> FlowPhase | None:
+        phase = self.phase(phase_id)
+        for transition in phase.transitions:
+            if transition.on == signal:
+                return transition.to
+        if signal == "complete":
+            return self.phase_after(phase_id)
+        return None
 
     def referenced_providers(self, fallback_provider: str) -> set[str]:
         providers = {self.defaults.provider or fallback_provider}
@@ -115,6 +177,20 @@ class WorkflowSpec:
             "path": str(self.path),
             "phases": [phase.to_dict() for phase in self.phases],
         }
+
+    @classmethod
+    def from_run_dict(cls, data: dict[str, Any]) -> WorkflowSpec:
+        return cls(
+            version=int(data["version"]),
+            name=str(data["name"]),
+            work_type=str(data["work_type"]),
+            description=str(data.get("description", "")),
+            mode=str(data.get("mode", "complex")),
+            repos=[str(repo) for repo in data.get("repos", [])],
+            defaults=WorkflowDefaults.from_dict(data.get("defaults", {})),
+            phases=[WorkflowPhase.from_dict(phase) for phase in data["phases"]],
+            path=Path(str(data.get("path", ""))),
+        )
 
 
 @dataclass(frozen=True)

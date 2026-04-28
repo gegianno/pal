@@ -27,8 +27,16 @@ def _workflow_body(
     provider: str = "fake",
     requirement: str = "local_headless",
     agent_provider: str = "",
+    design_requires_approval: bool = False,
+    implement_blocked_transition: bool = False,
 ) -> str:
     agent_provider_line = f"        provider: {agent_provider}\n" if agent_provider else ""
+    approval_line = "    requires_approval: true\n" if design_requires_approval else ""
+    transition_lines = (
+        "    transitions:\n      - on: blocked\n        to: design\n"
+        if implement_blocked_transition
+        else ""
+    )
     return f"""
 version: 1
 name: dev-complex
@@ -41,13 +49,16 @@ defaults:
 phases:
   - id: design
     policy: co-driver
+{approval_line}    transitions:
+      - on: complete
+        to: implement
     agents:
       - id: designer
         role: design
 {agent_provider_line}        requires:
           - {requirement}
   - id: implement
-    agents: []
+{transition_lines}    agents: []
 """
 
 
@@ -287,3 +298,194 @@ def test_flow_service_start_rejects_invalid_workflow(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Workflow spec is invalid"):
         service.start(feature="feat", repos=[], workflow="bad")
+
+
+def test_flow_service_advances_default_phase_order_and_completes(tmp_path: Path) -> None:
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        clock=lambda: "2026-04-27T00:00:00Z",
+    )
+    service.start(feature="feat", repos=[], phase=FlowPhase.REVIEW)
+
+    advanced = service.advance("feat")
+    completed = service.advance("feat")
+
+    assert advanced.current_phase == FlowPhase.SHIP
+    assert advanced.status == FlowStatus.RUNNING
+    assert advanced.phase_history[-1]["from"] == "review"
+    assert advanced.phase_history[-1]["to"] == "ship"
+    assert completed.status == FlowStatus.COMPLETED
+    assert completed.current_phase == FlowPhase.SHIP
+    assert completed.phase_history[-1]["to"] == ""
+    assert [event.type for event in service.events("feat")][-2:] == [
+        "flow.phase.advanced",
+        "flow.run.completed",
+    ]
+    with pytest.raises(ValueError, match="completed"):
+        service.advance("feat")
+
+
+def test_flow_service_rejects_unknown_transition_without_workflow(tmp_path: Path) -> None:
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+    )
+    service.start(feature="feat", repos=[])
+
+    with pytest.raises(ValueError, match="no workflow transition"):
+        service.advance("feat", signal="blocked")
+
+
+def test_flow_service_enforces_approval_before_workflow_advance(tmp_path: Path) -> None:
+    _write_workflow(
+        tmp_path,
+        "dev-complex",
+        _workflow_body(design_requires_approval=True),
+    )
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+        clock=lambda: "2026-04-27T00:00:00Z",
+    )
+    run = service.start(feature="feat", repos=[], workflow="dev-complex")
+
+    with pytest.raises(ValueError, match="requires approval"):
+        service.advance("feat")
+    approved = service.approve("feat")
+    advanced = service.advance("feat")
+
+    assert run.current_phase == FlowPhase.DESIGN
+    assert approved.approvals == {"design": "2026-04-27T00:00:00Z"}
+    assert advanced.current_phase == FlowPhase.IMPLEMENT
+    assert advanced.status == FlowStatus.RUNNING
+    assert service.events("feat")[-2].type == "flow.phase.approved"
+    assert service.events("feat")[-1].type == "flow.phase.advanced"
+
+
+def test_flow_service_approve_rejects_non_gated_phase(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "dev-complex", _workflow_body())
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+    service.start(feature="feat", repos=[], workflow="dev-complex")
+
+    with pytest.raises(ValueError, match="does not require approval"):
+        service.approve("feat")
+
+
+def test_flow_service_workflow_transition_signal_and_missing_signal(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "dev-complex", _workflow_body())
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+    service.start(feature="feat", repos=[], workflow="dev-complex")
+
+    with pytest.raises(ValueError, match="no transition"):
+        service.advance("feat", signal="unknown")
+    run = service.advance("feat", signal="complete")
+
+    assert run.current_phase == FlowPhase.IMPLEMENT
+
+
+def test_flow_service_block_and_replan_with_workflow_transition(tmp_path: Path) -> None:
+    _write_workflow(
+        tmp_path,
+        "dev-complex",
+        _workflow_body(implement_blocked_transition=True),
+    )
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+        clock=lambda: "2026-04-27T00:00:00Z",
+    )
+    service.start(feature="feat", repos=[], workflow="dev-complex")
+    service.advance("feat")
+
+    with pytest.raises(ValueError, match="reason is required"):
+        service.block("feat", reason=" ")
+    blocked = service.block("feat", reason="tests failed")
+    with pytest.raises(ValueError, match="blocked"):
+        service.advance("feat")
+    replanned = service.replan("feat", reason="need simpler design")
+
+    assert blocked.status == FlowStatus.BLOCKED
+    assert blocked.blocked_reason == "tests failed"
+    assert replanned.status == FlowStatus.RUNNING
+    assert replanned.current_phase == FlowPhase.DESIGN
+    assert replanned.blocked_reason == ""
+    assert replanned.phase_history[-1]["on"] == "replan"
+    assert [event.type for event in service.events("feat")][-2:] == [
+        "flow.phase.blocked",
+        "flow.phase.replanned",
+    ]
+
+
+def test_flow_service_replan_defaults_and_explicit_phase_without_workflow(tmp_path: Path) -> None:
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+    )
+    service.start(feature="feat", repos=[], phase=FlowPhase.IMPLEMENT)
+
+    blocked = service.block("feat", reason="blocked")
+    replanned = service.replan("feat")
+    explicit = service.replan("feat", phase=FlowPhase.VERIFY, reason="check")
+
+    assert blocked.status == FlowStatus.BLOCKED
+    assert replanned.current_phase == FlowPhase.DESIGN
+    assert explicit.current_phase == FlowPhase.VERIFY
+
+
+def test_flow_service_replan_stays_on_current_phase_when_no_design_phase(tmp_path: Path) -> None:
+    _write_workflow(
+        tmp_path,
+        "verify-only",
+        """
+version: 1
+name: verify-only
+work_type: dev
+defaults:
+  provider: fake
+phases:
+  - id: verify
+    agents: []
+""",
+    )
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+    service.start(feature="feat", repos=[], workflow="verify-only")
+    service.block("feat", reason="blocked")
+
+    run = service.replan("feat")
+
+    assert run.current_phase == FlowPhase.VERIFY
+    assert run.phase_history[-1]["reason"] == "start"
+
+
+def test_flow_service_rejects_invalid_stored_workflow_metadata(tmp_path: Path) -> None:
+    store = LocalFlowStore(tmp_path / "_wt")
+    _write_workflow(
+        tmp_path,
+        "dev-complex",
+        _workflow_body(design_requires_approval=True),
+    )
+    service = LocalFlowService(
+        store=store,
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+    run = service.start(feature="feat", repos=[], workflow="dev-complex")
+    store.write_run_json(run, "workflow.json", [])
+
+    with pytest.raises(ValueError, match="Stored workflow metadata is invalid"):
+        service.approve("feat")
