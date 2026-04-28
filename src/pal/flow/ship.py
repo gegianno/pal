@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from ..git import is_git_repo
+from ..identifiers import IdentifierError, normalize_repo_name, safe_child_path
 from .providers.command import LocalCommandRunner
 
 
@@ -324,19 +325,8 @@ def _command_error(command: str, stderr: str) -> str:
 
 
 def _repo_path(feature_dir: Path, repo: str) -> Path:
-    name = repo.strip()
-    if not name:
-        raise FlowShipError("Repo name must not be empty.")
-    candidate = Path(name)
-    if (
-        not candidate.parts
-        or candidate.is_absolute()
-        or any(part == ".." for part in candidate.parts)
-    ):
-        raise FlowShipError(f"Repo worktree must stay inside feature workspace: {repo}")
-    resolved = (feature_dir / candidate).resolve()
     try:
-        resolved.relative_to(feature_dir)
-    except ValueError as exc:
+        name = normalize_repo_name(repo)
+        return safe_child_path(feature_dir, name, "Repo worktree")
+    except IdentifierError as exc:
         raise FlowShipError(f"Repo worktree must stay inside feature workspace: {repo}") from exc
-    return resolved

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from ..git import branch_exists, is_git_repo, worktree_add
+from ..identifiers import normalize_feature_name, normalize_repo_name, safe_child_path
 from ..local_files import copy_local_files, resolve_local_file_paths
 from ..vscode import write_code_workspace
 from .base import (
@@ -12,6 +14,15 @@ from .base import (
     WorkspaceRepoResult,
     validate_workspace_mode,
 )
+
+
+@dataclass(frozen=True)
+class _RepoPlan:
+    repo: str
+    source_path: Path
+    worktree_path: Path
+    branch: str
+    status: str
 
 
 class GitWorktreeWorkspaceBackend:
@@ -28,12 +39,13 @@ class GitWorktreeWorkspaceBackend:
         overwrite_local: bool | None = None,
     ) -> WorkspacePrepareResult:
         normalized_mode = validate_workspace_mode(mode)
-        feature_dir = self.feature_dir(feature)
-        unique_repos = list(dict.fromkeys(repos))
+        feature_name = normalize_feature_name(feature)
+        feature_dir = self.feature_dir(feature_name)
+        unique_repos = self._repo_names(repos)
 
         if normalized_mode == STATE_ONLY_WORKSPACE_MODE:
             return WorkspacePrepareResult(
-                feature=feature,
+                feature=feature_name,
                 mode=normalized_mode,
                 workspace_dir=str(feature_dir),
                 workspace_file="",
@@ -41,24 +53,27 @@ class GitWorktreeWorkspaceBackend:
             )
 
         if normalized_mode == "validate" and not feature_dir.exists():
-            raise ValueError(f"Feature workspace '{feature}' not found at {feature_dir}.")
+            raise ValueError(f"Feature workspace '{feature_name}' not found at {feature_dir}.")
+        plans = [
+            self._preflight_repo(feature=feature_name, repo=repo, mode=normalized_mode)
+            for repo in unique_repos
+        ]
         if normalized_mode != "validate":
             feature_dir.mkdir(parents=True, exist_ok=True)
 
         repo_results = [
             self._prepare_repo(
-                feature=feature,
-                repo=repo,
+                plan,
                 mode=normalized_mode,
                 copy_local=copy_local,
                 overwrite_local=overwrite_local,
             )
-            for repo in unique_repos
+            for plan in plans
         ]
-        workspace_file = self._workspace_file(feature, feature_dir, normalized_mode)
+        workspace_file = self._workspace_file(feature_name, feature_dir, normalized_mode)
 
         return WorkspacePrepareResult(
-            feature=feature,
+            feature=feature_name,
             mode=normalized_mode,
             workspace_dir=str(feature_dir),
             workspace_file=workspace_file,
@@ -66,27 +81,72 @@ class GitWorktreeWorkspaceBackend:
         )
 
     def feature_dir(self, feature: str) -> Path:
-        return self.cfg.worktree_root / feature
+        return safe_child_path(
+            self.cfg.worktree_root,
+            normalize_feature_name(feature),
+            "Feature workspace",
+        )
 
     def worktree_path(self, feature: str, repo: str) -> Path:
-        return self.feature_dir(feature) / repo
+        return safe_child_path(
+            self.feature_dir(feature),
+            normalize_repo_name(repo),
+            "Repo worktree",
+        )
 
     def branch(self, feature: str) -> str:
-        return f"{self.cfg.branch_prefix}/{feature}"
+        return f"{self.cfg.branch_prefix}/{normalize_feature_name(feature)}"
 
     def _prepare_repo(
         self,
+        plan: _RepoPlan,
         *,
-        feature: str,
-        repo: str,
         mode: str,
         copy_local: bool | None,
         overwrite_local: bool | None,
     ) -> WorkspaceRepoResult:
-        repo_path = self._require_source_repo(repo)
+        if plan.status == "created":
+            worktree_add(
+                plan.source_path,
+                plan.worktree_path,
+                plan.branch,
+                create=not branch_exists(plan.source_path, plan.branch),
+            )
+
+        local_files = WorkspaceLocalFilesResult()
+        if mode != "validate" and self._copy_local_enabled(copy_local):
+            local_files = self._sync_local_files(
+                plan.source_path,
+                plan.worktree_path,
+                repo=plan.repo,
+                overwrite=self._overwrite_local_enabled(overwrite_local),
+            )
+
+        return WorkspaceRepoResult(
+            repo=plan.repo,
+            source_path=str(plan.source_path),
+            worktree_path=str(plan.worktree_path),
+            branch=plan.branch,
+            status=plan.status,
+            local_files=local_files,
+        )
+
+    def _require_source_repo(self, repo: str) -> Path:
+        repo_name = normalize_repo_name(repo)
+        repo_path = safe_child_path(self.cfg.root, repo_name, "Source repo")
+        if not repo_path.exists():
+            raise ValueError(f"Repo '{repo_name}' not found under root '{self.cfg.root}'.")
+        if not is_git_repo(repo_path):
+            raise ValueError(f"'{repo_path}' is not a git repo.")
+        return repo_path
+
+    def _repo_names(self, repos: list[str]) -> list[str]:
+        return list(dict.fromkeys(normalize_repo_name(repo) for repo in repos))
+
+    def _preflight_repo(self, *, feature: str, repo: str, mode: str) -> _RepoPlan:
+        source_path = self._require_source_repo(repo)
         worktree_path = self.worktree_path(feature, repo)
         branch = self.branch(feature)
-
         if worktree_path.exists():
             if not is_git_repo(worktree_path):
                 raise ValueError(f"Workspace path exists but is not a git repo: {worktree_path}")
@@ -96,39 +156,14 @@ class GitWorktreeWorkspaceBackend:
         else:
             if mode == "validate":
                 raise ValueError(f"Worktree for repo '{repo}' not found at {worktree_path}.")
-            worktree_add(
-                repo_path,
-                worktree_path,
-                branch,
-                create=not branch_exists(repo_path, branch),
-            )
             status = "created"
-
-        local_files = WorkspaceLocalFilesResult()
-        if mode != "validate" and self._copy_local_enabled(copy_local):
-            local_files = self._sync_local_files(
-                repo_path,
-                worktree_path,
-                repo=repo,
-                overwrite=self._overwrite_local_enabled(overwrite_local),
-            )
-
-        return WorkspaceRepoResult(
+        return _RepoPlan(
             repo=repo,
-            source_path=str(repo_path),
-            worktree_path=str(worktree_path),
+            source_path=source_path,
+            worktree_path=worktree_path,
             branch=branch,
             status=status,
-            local_files=local_files,
         )
-
-    def _require_source_repo(self, repo: str) -> Path:
-        repo_path = self.cfg.root / repo
-        if not repo_path.exists():
-            raise ValueError(f"Repo '{repo}' not found under root '{self.cfg.root}'.")
-        if not is_git_repo(repo_path):
-            raise ValueError(f"'{repo_path}' is not a git repo.")
-        return repo_path
 
     def _workspace_file(self, feature: str, feature_dir: Path, mode: str) -> str:
         if mode == "validate":

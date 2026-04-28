@@ -253,14 +253,20 @@ def _apply_dict(cfg: PalConfig, d: dict[str, Any]) -> None:
                 command = hook.get("command")
                 if not isinstance(command, list):
                     continue
-                events = hook.get("events", ["*"])
+                events = _flow_hook_events(hook.get("events", ["*"]))
                 parsed_hooks.append(
                     FlowHookConfig(
                         name=str(hook.get("name", f"hook-{index + 1}")),
                         command=[str(part) for part in command],
-                        events=[str(event) for event in events]
-                        if isinstance(events, list)
-                        else ["*"],
+                        events=events,
                     )
                 )
             cfg.flow.hooks = parsed_hooks
+
+
+def _flow_hook_events(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [str(event) for event in value]
+    return []

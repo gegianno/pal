@@ -156,3 +156,35 @@ def test_store_raises_when_latest_run_is_missing(tmp_path: Path) -> None:
 
     with pytest.raises(FileNotFoundError, match="No flow runs found"):
         store.latest_run_id("missing")
+
+
+@pytest.mark.parametrize("feature", ["../escape", "/tmp/escape", ".", "feat/nested"])
+def test_store_rejects_feature_names_that_escape_workspace(
+    tmp_path: Path,
+    feature: str,
+) -> None:
+    store = LocalFlowStore(tmp_path / "_wt")
+
+    with pytest.raises(ValueError, match="Feature name"):
+        store.feature_dir(feature)
+
+
+@pytest.mark.parametrize("run_id", ["../evil", "/tmp/evil", ".", "run/nested"])
+def test_store_rejects_run_ids_that_escape_run_storage(
+    tmp_path: Path,
+    run_id: str,
+) -> None:
+    store = LocalFlowStore(tmp_path / "_wt")
+
+    with pytest.raises(ValueError, match="Run ID"):
+        store.resolve_run_id("feat", run_id)
+
+
+def test_store_rejects_tampered_latest_run_id(tmp_path: Path) -> None:
+    store = LocalFlowStore(tmp_path / "_wt")
+    latest_path = store.latest_path("feat")
+    latest_path.parent.mkdir(parents=True)
+    latest_path.write_text("/tmp/evil\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Run ID"):
+        store.latest_run_id("feat")

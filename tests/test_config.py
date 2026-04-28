@@ -137,6 +137,44 @@ def test_load_config_parses_flow_hooks(tmp_path: Path) -> None:
     assert cfg.flow.hooks[1].events == ["*"]
 
 
+def test_load_config_parses_string_flow_hook_events(tmp_path: Path) -> None:
+    (tmp_path / ".pal.toml").write_text(
+        (
+            'root = "."\n\n'
+            "[[flow.hooks]]\n"
+            'name = "notify"\n'
+            'command = ["echo", "notify"]\n'
+            'events = "flow.phase.execution.failed"\n'
+        ),
+        encoding="utf-8",
+    )
+
+    cfg = load_config(root=tmp_path, cli_overrides={"root": str(tmp_path)})
+
+    assert cfg.flow.hooks[0].events == ["flow.phase.execution.failed"]
+
+
+def test_apply_dict_invalid_flow_hook_events_fail_closed(tmp_path: Path) -> None:
+    cfg = PalConfig(root=tmp_path, worktree_root=tmp_path / "_wt")
+
+    _apply_dict(
+        cfg,
+        {
+            "flow": {
+                "hooks": [
+                    {
+                        "name": "notify",
+                        "command": ["echo", "notify"],
+                        "events": {"not": "valid"},
+                    }
+                ]
+            }
+        },
+    )
+
+    assert cfg.flow.hooks[0].events == []
+
+
 def test_apply_dict_ignores_non_dict_flow_hook_entries(tmp_path: Path) -> None:
     cfg = PalConfig(root=tmp_path, worktree_root=tmp_path / "_wt")
 

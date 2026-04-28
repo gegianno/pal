@@ -3,16 +3,26 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from ..identifiers import (
+    normalize_feature_name,
+    normalize_identifier,
+    normalize_run_id,
+    safe_child_path,
+)
 from .events import FlowEventLog
 from .models import FlowEvent, FlowRun
 
 
 class LocalFlowStore:
     def __init__(self, worktree_root: Path) -> None:
-        self.worktree_root = worktree_root
+        self.worktree_root = worktree_root.expanduser().resolve()
 
     def feature_dir(self, feature: str) -> Path:
-        return self.worktree_root / feature
+        return safe_child_path(
+            self.worktree_root,
+            normalize_feature_name(feature),
+            "Feature workspace",
+        )
 
     def pal_dir(self, feature: str) -> Path:
         return self.feature_dir(feature) / ".pal"
@@ -21,7 +31,11 @@ class LocalFlowStore:
         return self.pal_dir(feature) / "runs"
 
     def run_dir(self, feature: str, run_id: str) -> Path:
-        return self.runs_dir(feature) / run_id
+        return safe_child_path(
+            self.runs_dir(feature),
+            normalize_run_id(run_id),
+            "Run directory",
+        )
 
     def latest_path(self, feature: str) -> Path:
         return self.runs_dir(feature) / "latest"
@@ -39,10 +53,12 @@ class LocalFlowStore:
         return self.run_dir(feature, run_id) / "latest"
 
     def provider_log_path(self, feature: str, run_id: str, provider: str) -> Path:
-        return self.run_dir(feature, run_id) / "providers" / f"{provider}.jsonl"
+        provider_name = normalize_identifier(provider, "Provider name")
+        return self.run_dir(feature, run_id) / "providers" / f"{provider_name}.jsonl"
 
     def phase_dir(self, feature: str, run_id: str, phase: str) -> Path:
-        return self.run_dir(feature, run_id) / "phase" / phase
+        phase_name = normalize_identifier(phase, "Phase name")
+        return self.run_dir(feature, run_id) / "phase" / phase_name
 
     def phase_execution_dir(
         self,
@@ -51,7 +67,8 @@ class LocalFlowStore:
         phase: str,
         execution_id: str,
     ) -> Path:
-        return self.phase_dir(feature, run_id, phase) / "executions" / execution_id
+        execution_name = normalize_identifier(execution_id, "Execution ID", max_length=120)
+        return self.phase_dir(feature, run_id, phase) / "executions" / execution_name
 
     def ship_dir(self, feature: str, run_id: str) -> Path:
         return self.run_dir(feature, run_id) / "ship"
@@ -177,11 +194,11 @@ class LocalFlowStore:
         path = self.latest_path(feature)
         if not path.exists():
             raise FileNotFoundError(f"No flow runs found for feature '{feature}'.")
-        return path.read_text(encoding="utf-8").strip()
+        return normalize_run_id(path.read_text(encoding="utf-8"))
 
     def resolve_run_id(self, feature: str, run_id: str | None) -> str:
         if run_id:
-            return run_id
+            return normalize_run_id(run_id)
         return self.latest_run_id(feature)
 
     def load_run(self, feature: str, run_id: str | None = None) -> FlowRun:

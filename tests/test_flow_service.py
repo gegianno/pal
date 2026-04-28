@@ -575,6 +575,20 @@ def test_flow_service_start_allows_cli_overrides_for_workflow(tmp_path: Path) ->
     assert run.current_phase == FlowPhase.IMPLEMENT
 
 
+def test_flow_service_start_rejects_phase_missing_from_workflow(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "single", _single_phase_workflow())
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+
+    with pytest.raises(ValueError, match="has no phase 'explore'"):
+        service.start(feature="feat", repos=[], workflow="single", phase=FlowPhase.EXPLORE)
+
+    assert not (tmp_path / "_wt" / "feat" / ".pal").exists()
+
+
 def test_flow_service_start_rejects_invalid_workflow(tmp_path: Path) -> None:
     _write_workflow(tmp_path, "bad", _workflow_body(provider="missing"))
     service = LocalFlowService(
@@ -1060,6 +1074,61 @@ def test_flow_service_approve_rejects_non_gated_phase(tmp_path: Path) -> None:
         service.approve("feat")
 
 
+def test_flow_service_approve_rejects_completed_runs(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "gated", _single_phase_workflow(approval=True))
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+    service.start(feature="feat", repos=[], workflow="gated")
+
+    service.approve("feat")
+    service.advance("feat")
+
+    with pytest.raises(ValueError, match="completed"):
+        service.approve("feat")
+
+
+def test_flow_service_approve_rejects_non_current_phases(tmp_path: Path) -> None:
+    _write_workflow(
+        tmp_path,
+        "dev-complex",
+        _workflow_body(design_requires_approval=True),
+    )
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+    service.start(feature="feat", repos=[], workflow="dev-complex")
+
+    with pytest.raises(ValueError, match="Can only approve current phase"):
+        service.approve("feat", phase=FlowPhase.IMPLEMENT)
+
+
+def test_flow_service_replan_clears_stale_phase_approvals(tmp_path: Path) -> None:
+    _write_workflow(
+        tmp_path,
+        "dev-complex",
+        _workflow_body(design_requires_approval=True),
+    )
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+        clock=lambda: "2026-04-27T00:00:00Z",
+    )
+    service.start(feature="feat", repos=[], workflow="dev-complex")
+
+    service.approve("feat")
+    replanned = service.replan("feat", phase=FlowPhase.DESIGN, reason="new design")
+
+    assert replanned.approvals == {}
+    with pytest.raises(ValueError, match="requires approval"):
+        service.advance("feat")
+
+
 def test_flow_service_workflow_transition_signal_and_missing_signal(tmp_path: Path) -> None:
     _write_workflow(tmp_path, "dev-complex", _workflow_body())
     service = LocalFlowService(
@@ -1124,6 +1193,19 @@ def test_flow_service_replan_defaults_and_explicit_phase_without_workflow(tmp_pa
     assert blocked.status == FlowStatus.BLOCKED
     assert replanned.current_phase == FlowPhase.DESIGN
     assert explicit.current_phase == FlowPhase.VERIFY
+
+
+def test_flow_service_replan_rejects_phase_missing_from_workflow(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "single", _single_phase_workflow())
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+    service.start(feature="feat", repos=[], workflow="single")
+
+    with pytest.raises(ValueError, match="has no phase 'explore'"):
+        service.replan("feat", phase=FlowPhase.EXPLORE)
 
 
 def test_flow_service_replan_stays_on_current_phase_when_no_design_phase(tmp_path: Path) -> None:

@@ -4,6 +4,12 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Mapping
 
+from ..identifiers import normalize_feature_name, normalize_repo_name
+from ..workspaces import (
+    STATE_ONLY_WORKSPACE_MODE,
+    WorkspaceBackend,
+    validate_workspace_mode,
+)
 from .artifacts import (
     ArtifactPathError,
     ArtifactValidation,
@@ -28,11 +34,6 @@ from .ship import FlowShipSummary, FlowShipper
 from .store import LocalFlowStore
 from .workflows.library import LocalWorkflowLibrary, WorkflowSpecError
 from .workflows.models import WorkflowSpec, WorkflowValidationResult
-from ..workspaces import (
-    STATE_ONLY_WORKSPACE_MODE,
-    WorkspaceBackend,
-    validate_workspace_mode,
-)
 
 _DEFAULT_PHASE_ORDER = [
     FlowPhase.EXPLORE,
@@ -141,6 +142,7 @@ class LocalFlowService:
         copy_local: bool | None = None,
         overwrite_local: bool | None = None,
     ) -> FlowRun:
+        feature_name = normalize_feature_name(feature)
         normalized_workspace_mode = validate_workspace_mode(workspace_mode)
         workflow_spec = self.load_workflow(workflow) if workflow else None
         if workflow_spec:
@@ -157,9 +159,12 @@ class LocalFlowService:
         selected_phase = phase or (
             workflow_spec.initial_phase if workflow_spec else FlowPhase.EXPLORE
         )
+        self._ensure_workflow_phase(workflow_spec, selected_phase)
         selected_mode = mode or (workflow_spec.mode if workflow_spec else "routine")
         selected_repos = (
-            list(repos) if repos else (list(workflow_spec.repos) if workflow_spec else [])
+            self._normalize_repos(repos)
+            if repos
+            else self._normalize_repos(workflow_spec.repos if workflow_spec else [])
         )
         policies = workflow_spec.policies_by_phase() if workflow_spec else default_policies()
         workspace_result = None
@@ -167,7 +172,7 @@ class LocalFlowService:
             if not self.workspace_backend:
                 raise ValueError("Workspace backend is not configured for this flow service.")
             workspace_result = self.workspace_backend.prepare(
-                feature=feature,
+                feature=feature_name,
                 repos=selected_repos,
                 mode=normalized_workspace_mode,
                 copy_local=copy_local,
@@ -176,13 +181,13 @@ class LocalFlowService:
         now = self.clock()
         run = FlowRun(
             run_id=self.id_factory("run"),
-            feature=feature,
+            feature=feature_name,
             mode=selected_mode,
             repos=selected_repos,
             current_phase=selected_phase,
             status=FlowStatus.RUNNING,
             policies=policies,
-            artifact_root=str(self.store.pal_dir(feature) / "artifacts"),
+            artifact_root=str(self.store.pal_dir(feature_name) / "artifacts"),
             created_at=now,
             updated_at=now,
             workflow_name=workflow_spec.name if workflow_spec else "",
@@ -196,7 +201,7 @@ class LocalFlowService:
                 }
             ],
         )
-        self.store.feature_dir(feature).mkdir(parents=True, exist_ok=True)
+        self.store.feature_dir(feature_name).mkdir(parents=True, exist_ok=True)
         self.store.create_run(run)
         if workflow_spec:
             self.store.write_run_json(run, "workflow.json", workflow_spec.to_run_dict())
@@ -214,7 +219,7 @@ class LocalFlowService:
             {provider.name: preflight.auth.to_dict()},
         )
         payload = {
-            "feature": feature,
+            "feature": feature_name,
             "mode": selected_mode,
             "repos": selected_repos,
             "provider": provider.name,
@@ -243,9 +248,9 @@ class LocalFlowService:
             launch_result = provider.launch_headless(
                 ProviderLaunchRequest(
                     run=run,
-                    workspace_dir=self.store.feature_dir(feature),
+                    workspace_dir=self.store.feature_dir(feature_name),
                     prompt=prompt,
-                    output_dir=self.store.latest_output_dir(feature, run.run_id),
+                    output_dir=self.store.latest_output_dir(feature_name, run.run_id),
                 )
             )
             launch_ended_at = self.clock()
@@ -637,8 +642,15 @@ class LocalFlowService:
         actor: str = "human",
     ) -> FlowRun:
         run = self.status(feature, run_id)
+        self._ensure_can_mutate(run, allow_blocked=True)
         workflow = self._stored_workflow(run)
         target_phase = phase or run.current_phase
+        self._ensure_workflow_phase(workflow, target_phase)
+        if target_phase != run.current_phase:
+            raise ValueError(
+                f"Can only approve current phase '{run.current_phase.value}', "
+                f"not '{target_phase.value}'."
+            )
         if not self._phase_requires_approval(workflow, target_phase):
             raise ValueError(f"Phase '{target_phase.value}' does not require approval.")
         now = self.clock()
@@ -716,6 +728,7 @@ class LocalFlowService:
             run,
             current_phase=target,
             status=FlowStatus.RUNNING,
+            approvals=self._clear_phase_approval(run.approvals, target),
             updated_at=now,
             blocked_reason="",
             blocked_at="",
@@ -787,6 +800,7 @@ class LocalFlowService:
         self._ensure_can_mutate(run, allow_blocked=True)
         workflow = self._stored_workflow(run)
         target = phase or self._replan_target(run, workflow)
+        self._ensure_workflow_phase(workflow, target)
         now = self.clock()
         history = list(run.phase_history)
         if target != run.current_phase:
@@ -803,6 +817,7 @@ class LocalFlowService:
             run,
             current_phase=target,
             status=FlowStatus.RUNNING,
+            approvals=self._clear_phase_approval(run.approvals, target),
             blocked_reason="",
             blocked_at="",
             updated_at=now,
@@ -872,6 +887,28 @@ class LocalFlowService:
         if run.repos:
             lines.append(f"- Repos: {', '.join(f'`{repo}`' for repo in run.repos)}")
         return "\n".join(lines)
+
+    def _normalize_repos(self, repos: list[str]) -> list[str]:
+        return list(dict.fromkeys(normalize_repo_name(repo) for repo in repos))
+
+    def _ensure_workflow_phase(
+        self,
+        workflow: WorkflowSpec | None,
+        phase: FlowPhase,
+    ) -> None:
+        if workflow:
+            workflow.phase(phase)
+
+    def _clear_phase_approval(
+        self,
+        approvals: dict[str, str],
+        phase: FlowPhase,
+    ) -> dict[str, str]:
+        if phase.value not in approvals:
+            return dict(approvals)
+        updated = dict(approvals)
+        del updated[phase.value]
+        return updated
 
     def _workflow_provider_errors(self, spec: WorkflowSpec) -> list[str]:
         errors: list[str] = []

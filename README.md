@@ -178,11 +178,15 @@ Workspace preparation is explicit in V1. By default, `pal flow start` uses `--wo
 and only records flow state. Use `--workspace reuse` to create any missing repo worktrees while
 reusing existing ones, `--workspace create` to fail if a requested repo worktree already exists, or
 `--workspace validate` to require that the requested feature workspace and repo worktrees already
-exist. Prepared workspace metadata is stored in `.pal/runs/<run-id>/workspace.json`.
+exist. Prepared workspace metadata is stored in `.pal/runs/<run-id>/workspace.json`. Feature names,
+repo names, and run IDs are safe single path segments only: no absolute paths, path separators,
+`.`/`..`, or traversal. Workspace creation preflights all requested repos before creating any git
+worktree, so validation failures do not leave partial feature workspaces.
 
 Phase progression is explicit too. `advance` follows workflow transitions, `approve` satisfies
 `requires_approval: true` gates, and `block`/`replan` records replanning loops without hiding them
-inside agent output.
+inside agent output. Approvals apply only to the current phase and are cleared when that phase is
+re-entered through `replan` or a transition, so a new attempt must be approved again.
 
 Workflow specs are intentionally template-like YAML:
 
@@ -242,7 +246,8 @@ Local hooks can be configured in `.pal.toml` and run after matching flow events.
 recorded in `.pal/runs/<run-id>/hooks.jsonl`; hook failures do not fail the flow command. Hook
 commands receive event JSON plus run context in environment variables such as `PAL_FLOW_EVENT_JSON`,
 `PAL_FLOW_RUN_JSON`, `PAL_FLOW_WORKFLOW`, `PAL_FLOW_WORK_TYPE`, `PAL_FLOW_REPOS`, and
-`PAL_FLOW_ARTIFACT_ROOT`.
+`PAL_FLOW_ARTIFACT_ROOT`. `events` can be either a single event string or a list; invalid event
+configuration fails closed instead of matching every event.
 
 ```toml
 [[flow.hooks]]

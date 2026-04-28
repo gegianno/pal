@@ -285,3 +285,70 @@ def test_git_worktree_backend_skips_local_copy_when_disabled_or_no_specs(
     assert explicit_disabled.repos[0].local_files == WorkspaceLocalFilesResult()
     assert config_enabled_but_no_specs.repos[0].local_files == WorkspaceLocalFilesResult()
     assert resolve_calls == 1
+
+
+@pytest.mark.parametrize("feature", ["../escape", "/tmp/escape", ".", "feat/nested"])
+def test_git_worktree_backend_rejects_unsafe_feature_names(
+    tmp_path: Path,
+    feature: str,
+) -> None:
+    backend = GitWorktreeWorkspaceBackend(_cfg(tmp_path))
+
+    with pytest.raises(ValueError, match="Feature name"):
+        backend.prepare(feature=feature, repos=[], mode="state-only")
+
+
+@pytest.mark.parametrize("repo", ["../outside", "/tmp/outside", ".", "apps/api"])
+def test_git_worktree_backend_rejects_unsafe_repo_names(
+    tmp_path: Path,
+    repo: str,
+) -> None:
+    backend = GitWorktreeWorkspaceBackend(_cfg(tmp_path))
+
+    with pytest.raises(ValueError, match="Repo name"):
+        backend.prepare(feature="feat", repos=[repo], mode="reuse")
+
+
+def test_git_worktree_backend_rejects_source_repo_symlink_escape(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    escaped = root / "escaped"
+    escaped.symlink_to(outside, target_is_directory=True)
+    backend = GitWorktreeWorkspaceBackend(_cfg(root))
+
+    with pytest.raises(ValueError, match="Source repo must stay under"):
+        backend.prepare(feature="feat", repos=["escaped"], mode="reuse")
+
+
+def test_git_worktree_backend_preflights_repos_before_creating_worktrees(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "api").mkdir()
+    monkeypatch.setattr(git_worktree, "is_git_repo", lambda path: path == tmp_path / "api")
+    worktree_calls: list[Path] = []
+
+    def fake_worktree_add(
+        _repo_path: Path,
+        worktree_path: Path,
+        _branch: str,
+        _create: bool,
+    ) -> None:
+        worktree_calls.append(worktree_path)
+        worktree_path.mkdir(parents=True)
+
+    monkeypatch.setattr(git_worktree, "worktree_add", fake_worktree_add)
+
+    with pytest.raises(ValueError, match="Repo 'missing' not found"):
+        GitWorktreeWorkspaceBackend(_cfg(tmp_path)).prepare(
+            feature="feat",
+            repos=["api", "missing"],
+            mode="reuse",
+        )
+
+    assert worktree_calls == []
+    assert not (tmp_path / "_wt" / "feat" / "api").exists()
