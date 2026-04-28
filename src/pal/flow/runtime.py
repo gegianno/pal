@@ -7,6 +7,7 @@ from .hooks import FlowHook, FlowHookDispatcher
 from .service import LocalFlowService
 from .store import LocalFlowStore
 from .workflows.library import LocalWorkflowLibrary
+from ..workspaces import GitWorktreeWorkspaceBackend
 
 
 def build_local_flow_service(cfg) -> LocalFlowService:  # noqa: ANN001
@@ -19,6 +20,7 @@ def build_local_flow_service(cfg) -> LocalFlowService:  # noqa: ANN001
         },
         default_provider="fake",
         workflow_library=LocalWorkflowLibrary(cfg.root),
+        workspace_backend=GitWorktreeWorkspaceBackend(cfg),
         hooks=FlowHookDispatcher(
             hooks=[
                 FlowHook(name=hook.name, command=hook.command, events=hook.events)

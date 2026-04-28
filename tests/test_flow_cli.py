@@ -233,6 +233,22 @@ def test_flow_start_with_workflow_uses_spec_defaults(tmp_path: Path) -> None:
     assert "phase_history" in status.output
 
 
+def test_flow_start_can_prepare_empty_workspace_from_cli(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["flow", "start", "feat", "--root", str(tmp_path), "--workspace", "reuse"],
+    )
+
+    store = LocalFlowStore(tmp_path / "_wt")
+    run_id = store.latest_run_id("feat")
+    workspace = store.read_run_json("feat", run_id, "workspace.json")
+    assert result.exit_code == 0, result.output
+    assert "workspace: reuse" in result.output
+    assert isinstance(workspace, dict)
+    assert workspace["mode"] == "reuse"
+    assert (tmp_path / "_wt" / "feat" / "feat.code-workspace").is_file()
+
+
 def test_flow_start_rejects_invalid_workflow(tmp_path: Path) -> None:
     _write_workflow(
         tmp_path,

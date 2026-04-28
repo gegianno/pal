@@ -11,6 +11,7 @@ from pal.flow.providers.fake import FakeFlowProvider
 from pal.flow.service import LocalFlowService, default_policies
 from pal.flow.store import LocalFlowStore
 from pal.flow.workflows.library import LocalWorkflowLibrary, WorkflowSpecError
+from pal.workspaces import WorkspacePrepareResult, WorkspaceRepoResult
 
 
 def _ids() -> list[str]:
@@ -38,6 +39,46 @@ class RecordingHookRunner:
         return HookCommandResult(
             returncode=0,
             stdout=f"{command[0]}:{env['PAL_FLOW_EVENT_TYPE']}:{timeout}\n",
+        )
+
+
+class RecordingWorkspaceBackend:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+
+    def prepare(
+        self,
+        *,
+        feature: str,
+        repos: list[str],
+        mode: str,
+        copy_local: bool | None = None,
+        overwrite_local: bool | None = None,
+    ) -> WorkspacePrepareResult:
+        self.calls.append(
+            {
+                "feature": feature,
+                "repos": list(repos),
+                "mode": mode,
+                "copy_local": copy_local,
+                "overwrite_local": overwrite_local,
+            }
+        )
+        return WorkspacePrepareResult(
+            feature=feature,
+            mode=mode,
+            workspace_dir="/tmp/_wt/feat",
+            workspace_file="/tmp/_wt/feat/feat.code-workspace",
+            repos=[
+                WorkspaceRepoResult(
+                    repo=repo,
+                    source_path=f"/tmp/{repo}",
+                    worktree_path=f"/tmp/_wt/feat/{repo}",
+                    branch="feat/feat",
+                    status="created",
+                )
+                for repo in repos
+            ],
         )
 
 
@@ -330,6 +371,52 @@ def test_flow_service_start_with_workflow_persists_metadata(tmp_path: Path) -> N
     assert run.policies["implement"].value == "autonomous"
     assert store.read_run_json("feat", run.run_id, "workflow.json")["name"] == "dev-complex"
     assert service.events("feat")[0].payload["workflow"] == "dev-complex"
+
+
+def test_flow_service_start_can_prepare_real_workspace(tmp_path: Path) -> None:
+    workspace = RecordingWorkspaceBackend()
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workspace_backend=workspace,
+    )
+
+    run = service.start(
+        feature="feat",
+        repos=["api"],
+        workspace_mode="reuse",
+        copy_local=True,
+        overwrite_local=False,
+    )
+
+    assert workspace.calls == [
+        {
+            "feature": "feat",
+            "repos": ["api"],
+            "mode": "reuse",
+            "copy_local": True,
+            "overwrite_local": False,
+        }
+    ]
+    workspace_json = service.store.read_run_json("feat", run.run_id, "workspace.json")
+    assert isinstance(workspace_json, dict)
+    assert workspace_json["mode"] == "reuse"
+    assert workspace_json["repos"][0]["repo"] == "api"
+    assert [event.type for event in service.events("feat")] == [
+        "flow.run.started",
+        "flow.workspace.prepared",
+        "provider.started",
+    ]
+
+
+def test_flow_service_start_rejects_workspace_modes_without_backend(tmp_path: Path) -> None:
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+    )
+
+    with pytest.raises(ValueError, match="Workspace backend is not configured"):
+        service.start(feature="feat", repos=[], workspace_mode="reuse")
 
 
 def test_flow_service_start_allows_cli_overrides_for_workflow(tmp_path: Path) -> None:

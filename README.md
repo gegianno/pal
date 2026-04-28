@@ -145,6 +145,7 @@ Validate specs and start a workflow-backed run:
 pal flow providers
 pal flow validate dev-complex
 pal flow start feat-auth --workflow dev-complex
+pal flow start feat-auth --workflow dev-complex --workspace reuse
 pal flow render feat-auth
 pal flow execute feat-auth
 pal flow artifacts feat-auth
@@ -160,6 +161,12 @@ pal flow watch feat-auth
 Provider execution is still explicit and safe by default: `pal flow start` records durable run state
 and provider preflight metadata, but only runs a local headless agent when `--headless --prompt ...`
 is passed.
+
+Workspace preparation is explicit in V1. By default, `pal flow start` uses `--workspace state-only`
+and only records flow state. Use `--workspace reuse` to create any missing repo worktrees while
+reusing existing ones, `--workspace create` to fail if a requested repo worktree already exists, or
+`--workspace validate` to require that the requested feature workspace and repo worktrees already
+exist. Prepared workspace metadata is stored in `.pal/runs/<run-id>/workspace.json`.
 
 Phase progression is explicit too. `advance` follows workflow transitions, `approve` satisfies
 `requires_approval: true` gates, and `block`/`replan` records replanning loops without hiding them

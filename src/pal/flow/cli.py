@@ -85,6 +85,21 @@ def flow_start(
         "-w",
         help="Workflow spec name or path under .pal/flows.",
     ),
+    workspace: str = typer.Option(
+        "state-only",
+        "--workspace",
+        help="Workspace preparation mode: state-only, create, reuse, or validate.",
+    ),
+    copy_local: Optional[bool] = typer.Option(
+        None,
+        "--copy-local/--no-copy-local",
+        help="Copy local files into prepared worktrees (default: config).",
+    ),
+    overwrite_local: Optional[bool] = typer.Option(
+        None,
+        "--overwrite-local/--no-overwrite-local",
+        help="Overwrite existing local files when copying (default: config).",
+    ),
     headless: bool = typer.Option(False, "--headless", help="Run provider in local headless mode."),
     prompt: str = typer.Option("", "--prompt", help="Prompt for explicit headless provider runs."),
     root: Path = typer.Option(Path("."), "--root", "-r"),
@@ -107,13 +122,17 @@ def flow_start(
         headless=headless,
         prompt=prompt,
         workflow=workflow,
+        workspace_mode=workspace,
+        copy_local=copy_local,
+        overwrite_local=overwrite_local,
     )
     console.print(
         Panel.fit(
             f"run_id: {run.run_id}\n"
             f"feature: {run.feature}\n"
             f"phase: {run.current_phase.value}\n"
-            f"status: {run.status.value}",
+            f"status: {run.status.value}\n"
+            f"workspace: {workspace}",
             title="pal flow started",
         )
     )

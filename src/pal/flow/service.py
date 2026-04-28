@@ -21,6 +21,11 @@ from .rendering import PhaseBrief, build_phase_brief
 from .store import LocalFlowStore
 from .workflows.library import LocalWorkflowLibrary, WorkflowSpecError
 from .workflows.models import WorkflowSpec, WorkflowValidationResult
+from ..workspaces import (
+    STATE_ONLY_WORKSPACE_MODE,
+    WorkspaceBackend,
+    validate_workspace_mode,
+)
 
 _DEFAULT_PHASE_ORDER = [
     FlowPhase.EXPLORE,
@@ -51,6 +56,7 @@ class LocalFlowService:
         *,
         default_provider: str = "fake",
         workflow_library: LocalWorkflowLibrary | None = None,
+        workspace_backend: WorkspaceBackend | None = None,
         hooks: FlowHookDispatcher | None = None,
         clock: Callable[[], str] = utc_now,
         id_factory: Callable[[str], str] = new_id,
@@ -59,6 +65,7 @@ class LocalFlowService:
         self.providers = dict(providers)
         self.default_provider = default_provider
         self.workflow_library = workflow_library
+        self.workspace_backend = workspace_backend
         self.hooks = hooks or FlowHookDispatcher()
         self.clock = clock
         self.id_factory = id_factory
@@ -121,7 +128,11 @@ class LocalFlowService:
         headless: bool = False,
         prompt: str = "",
         workflow: str | None = None,
+        workspace_mode: str = STATE_ONLY_WORKSPACE_MODE,
+        copy_local: bool | None = None,
+        overwrite_local: bool | None = None,
     ) -> FlowRun:
+        normalized_workspace_mode = validate_workspace_mode(workspace_mode)
         workflow_spec = self.load_workflow(workflow) if workflow else None
         if workflow_spec:
             validation = self.validate_workflow(workflow_spec.path)
@@ -142,6 +153,17 @@ class LocalFlowService:
             list(repos) if repos else (list(workflow_spec.repos) if workflow_spec else [])
         )
         policies = workflow_spec.policies_by_phase() if workflow_spec else default_policies()
+        workspace_result = None
+        if normalized_workspace_mode != STATE_ONLY_WORKSPACE_MODE:
+            if not self.workspace_backend:
+                raise ValueError("Workspace backend is not configured for this flow service.")
+            workspace_result = self.workspace_backend.prepare(
+                feature=feature,
+                repos=selected_repos,
+                mode=normalized_workspace_mode,
+                copy_local=copy_local,
+                overwrite_local=overwrite_local,
+            )
         now = self.clock()
         run = FlowRun(
             run_id=self.id_factory("run"),
@@ -169,6 +191,8 @@ class LocalFlowService:
         self.store.create_run(run)
         if workflow_spec:
             self.store.write_run_json(run, "workflow.json", workflow_spec.to_run_dict())
+        if workspace_result:
+            self.store.write_run_json(run, "workspace.json", workspace_result.to_dict())
         preflight = provider.preflight()
         self.store.write_run_json(
             run,
@@ -191,6 +215,13 @@ class LocalFlowService:
             payload["workflow"] = workflow_spec.name
             payload["work_type"] = workflow_spec.work_type
         self._append_event(run, event_type="flow.run.started", actor="pal", payload=payload)
+        if workspace_result:
+            self._append_event(
+                run,
+                event_type="flow.workspace.prepared",
+                actor="pal",
+                payload=workspace_result.to_dict(),
+            )
         provider_result = provider.start(run)
         self._append_event(
             run,
