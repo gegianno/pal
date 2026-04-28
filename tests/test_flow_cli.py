@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,10 @@ from pal.flow.store import LocalFlowStore
 
 
 runner = CliRunner()
+
+
+def _plain(output: str) -> str:
+    return re.sub(r"\x1b\[[0-9;]*m", "", output)
 
 
 def test_flow_start_status_and_watch_commands(tmp_path: Path) -> None:
@@ -91,7 +96,7 @@ def test_flow_start_requires_prompt_for_headless_runs(tmp_path: Path) -> None:
     )
 
     assert result.exit_code != 0
-    assert "--prompt is required" in result.output
+    assert "--prompt is required" in _plain(result.output)
 
 
 def test_flow_start_headless_fake_records_completion(tmp_path: Path) -> None:
