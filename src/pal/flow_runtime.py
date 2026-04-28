@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .flow_provider import FakeFlowProvider
+from .flow_provider_fake import FakeFlowProvider
 from .flow_service import LocalFlowService
 from .flow_store import LocalFlowStore
 

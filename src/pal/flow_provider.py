@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable, Protocol
 
 from .flow_models import FlowRun
 
@@ -13,12 +13,6 @@ class ProviderResult:
     payload: dict[str, Any] = field(default_factory=dict)
 
 
-class FakeFlowProvider:
-    name = "fake"
-
-    def start(self, run: FlowRun) -> ProviderResult:
-        return ProviderResult(
-            provider=self.name,
-            summary=f"fake provider initialized run {run.run_id}",
-            payload={"feature": run.feature, "mode": run.mode, "repos": list(run.repos)},
-        )
+class FlowProvider(Protocol):
+    name: str
+    start: Callable[[FlowRun], ProviderResult]

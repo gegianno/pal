@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from pal.flow_models import FlowPhase, FlowStatus
-from pal.flow_provider import FakeFlowProvider
+from pal.flow_provider_fake import FakeFlowProvider
 from pal.flow_service import LocalFlowService, default_policies
 from pal.flow_store import LocalFlowStore
 

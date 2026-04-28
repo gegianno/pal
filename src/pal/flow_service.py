@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Callable
 
 from .flow_models import FlowEvent, FlowPhase, FlowPolicy, FlowRun, FlowStatus, new_id, utc_now
-from .flow_provider import FakeFlowProvider
+from .flow_provider import FlowProvider
 from .flow_store import LocalFlowStore
 
 
@@ -22,7 +22,7 @@ class LocalFlowService:
     def __init__(
         self,
         store: LocalFlowStore,
-        provider: FakeFlowProvider,
+        provider: FlowProvider,
         *,
         clock: Callable[[], str] = utc_now,
         id_factory: Callable[[str], str] = new_id,

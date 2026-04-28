@@ -8,7 +8,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from .config import load_config
+from .cli_config import cfg_from_options
 from .flow_models import FlowPhase, FlowRun
 from .flow_runtime import build_local_flow_service
 
@@ -22,12 +22,7 @@ def _cfg_from_ctx(
     worktree_root: Optional[Path],
     branch_prefix: Optional[str],
 ):
-    overrides = {"root": str(root)}
-    if worktree_root is not None:
-        overrides["worktree_root"] = str(worktree_root)
-    if branch_prefix is not None:
-        overrides["branch_prefix"] = branch_prefix
-    return load_config(root=root, cli_overrides=overrides)
+    return cfg_from_options(root, worktree_root, branch_prefix)
 
 
 def _parse_phase(value: str) -> FlowPhase:

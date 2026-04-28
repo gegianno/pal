@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pal.flow_models import FlowPhase, FlowRun, FlowStatus
-from pal.flow_provider import FakeFlowProvider
+from pal.flow_provider_fake import FakeFlowProvider
 from pal.flow_service import default_policies
 
 
