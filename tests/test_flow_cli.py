@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 import pal.flow.cli as flow_cli
 from pal.cli import app
 from pal.flow.events import FlowEventLog
-from pal.flow.models import FlowEvent, FlowPhase
+from pal.flow.models import FlowEvent, FlowPhase, FlowRun, FlowStatus
 from pal.flow.store import LocalFlowStore
 
 
@@ -964,6 +964,64 @@ def test_flow_watch_follow_uses_poll_guard(tmp_path: Path) -> None:
 
     assert result.exit_code == 0, result.output
     assert "flow.run.started" in result.output
+
+
+def test_flow_watch_follow_resolves_latest_run_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Service:
+        def __init__(self) -> None:
+            self.event_run_ids: list[str | None] = []
+
+        def status(self, _feature: str, _run_id: str | None) -> FlowRun:
+            return FlowRun(
+                run_id="run_pinned",
+                feature="feat",
+                mode="routine",
+                repos=[],
+                current_phase=FlowPhase.EXPLORE,
+                status=FlowStatus.RUNNING,
+                policies={},
+                artifact_root=str(tmp_path / "_wt" / "feat" / ".pal" / "artifacts"),
+                created_at="now",
+                updated_at="now",
+            )
+
+        def events(self, _feature: str, run_id: str | None) -> list[FlowEvent]:
+            self.event_run_ids.append(run_id)
+            return [
+                FlowEvent(
+                    id=f"evt_{len(self.event_run_ids)}",
+                    run_id=str(run_id),
+                    type="custom",
+                    timestamp="now",
+                    phase=FlowPhase.EXPLORE,
+                    actor="test",
+                )
+            ]
+
+    service = Service()
+    monkeypatch.setattr(flow_cli, "build_local_flow_service", lambda _cfg: service)
+
+    result = runner.invoke(
+        app,
+        [
+            "flow",
+            "watch",
+            "feat",
+            "--root",
+            str(tmp_path),
+            "--follow",
+            "--poll-interval",
+            "0",
+            "--max-polls",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert service.event_run_ids == ["run_pinned", "run_pinned"]
 
 
 def test_flow_watch_follow_allows_empty_event_stream_with_guard(tmp_path: Path) -> None:

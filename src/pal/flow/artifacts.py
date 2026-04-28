@@ -7,6 +7,10 @@ from typing import Any
 from .models import FlowPhase, FlowRun
 
 
+class ArtifactPathError(ValueError):
+    pass
+
+
 @dataclass(frozen=True)
 class ArtifactCheck:
     name: str
@@ -53,14 +57,10 @@ def validate_required_artifacts(
     workspace_dir: Path,
     required_artifacts: list[str],
 ) -> ArtifactValidation:
-    checks = [
-        ArtifactCheck(
-            name=artifact,
-            path=str(resolve_artifact_path(run, workspace_dir, artifact)),
-            exists=resolve_artifact_path(run, workspace_dir, artifact).is_file(),
-        )
-        for artifact in required_artifacts
-    ]
+    checks: list[ArtifactCheck] = []
+    for artifact in required_artifacts:
+        path = resolve_artifact_path(run, workspace_dir, artifact)
+        checks.append(ArtifactCheck(name=artifact, path=str(path), exists=path.is_file()))
     return ArtifactValidation(
         run=run,
         phase=run.current_phase,
@@ -70,11 +70,34 @@ def validate_required_artifacts(
 
 
 def resolve_artifact_path(run: FlowRun, workspace_dir: Path, artifact: str) -> Path:
-    path = Path(artifact)
+    del workspace_dir
+    root = Path(run.artifact_root).resolve()
+    path = root.joinpath(*_artifact_relative_path(artifact).parts).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise ArtifactPathError(
+            f"Artifact path must stay under the run artifact directory: {artifact}"
+        ) from exc
+    return path
+
+
+def validate_artifact_reference(artifact: str) -> None:
+    _artifact_relative_path(artifact)
+
+
+def _artifact_relative_path(artifact: str) -> Path:
+    value = artifact.strip()
+    if not value:
+        raise ArtifactPathError("Artifact path must not be empty.")
+    path = Path(value)
     if path.is_absolute():
-        return path
-    if artifact.startswith(".pal/"):
-        return workspace_dir / path
-    if path.parts[:1] == ("artifacts",):
-        return Path(run.artifact_root).joinpath(*path.parts[1:])
-    return Path(run.artifact_root) / path
+        raise ArtifactPathError(f"Artifact path must be relative: {artifact}")
+    parts = path.parts
+    if any(part == ".." for part in parts):
+        raise ArtifactPathError(f"Artifact path must not contain '..': {artifact}")
+    if parts[:1] == ("artifacts",):
+        parts = parts[1:]
+    if not parts or any(part in {"", "."} for part in parts):
+        raise ArtifactPathError(f"Artifact path must name a file under artifacts: {artifact}")
+    return Path(*parts)

@@ -297,6 +297,7 @@ def test_flow_service_headless_launch_records_session_and_logs(tmp_path: Path) -
     assert isinstance(sessions, list)
     assert sessions[0]["session_id"] == "session_test"
     assert sessions[0]["provider"] == "fake"
+    assert sessions[0]["launch_command"] == ["fake-flow-provider", "<prompt>"]
     assert (
         store.read_run_json("feat", run.run_id, "provider-auth.json")["fake"]["status"]
         == "available"
@@ -380,6 +381,36 @@ def test_flow_service_validates_unknown_agent_requirement(tmp_path: Path) -> Non
 
     assert result.valid is False
     assert "unknown requirement 'quantum_gpu'" in result.errors[0]
+
+
+def test_flow_service_validates_required_artifact_paths(tmp_path: Path) -> None:
+    _write_workflow(
+        tmp_path,
+        "bad-artifact",
+        """
+version: 1
+name: bad-artifact
+work_type: dev
+defaults:
+  provider: fake
+phases:
+  - id: design
+    required_artifacts:
+      - ../outside.md
+    agents: []
+""",
+    )
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+
+    result = service.validate_workflow("bad-artifact")
+
+    assert result.valid is False
+    assert "invalid required artifact" in result.errors[0]
+    assert "must not contain '..'" in result.errors[0]
 
 
 def test_flow_service_start_with_workflow_persists_metadata(tmp_path: Path) -> None:
@@ -718,6 +749,8 @@ def test_flow_service_execute_phase_runs_rendered_agents_and_records_artifacts(
     assert isinstance(manifest, dict)
     assert manifest["target"]["agent_id"] == "designer"
     assert manifest["paths"] == execution.paths
+    assert manifest["command"][-1] == "<prompt>"
+    assert execution.command[-1] == "<prompt>"
     assert manifest["diagnostics"]["executable"] == "fake-flow-provider"
     assert [event.type for event in service.events("feat")][-3:] == [
         "flow.phase.rendered",

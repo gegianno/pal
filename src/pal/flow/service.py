@@ -4,13 +4,19 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Mapping
 
-from .artifacts import ArtifactValidation, validate_required_artifacts
+from .artifacts import (
+    ArtifactPathError,
+    ArtifactValidation,
+    validate_artifact_reference,
+    validate_required_artifacts,
+)
 from .execution import (
     PhaseExecutionRecord,
     PhaseExecutionSummary,
     build_execution_prompt,
     execution_status,
     phase_execution_targets,
+    redact_command_prompt,
 )
 from .hooks import FlowHookDispatcher
 from .loop import FlowRunLoopSummary, FlowRunStep
@@ -114,7 +120,7 @@ class LocalFlowService:
             path=spec.path,
             name=spec.name,
             work_type=spec.work_type,
-            errors=self._workflow_provider_errors(spec),
+            errors=[*self._workflow_provider_errors(spec), *self._workflow_artifact_errors(spec)],
         )
 
     def validate_workflows(self) -> list[WorkflowValidationResult]:
@@ -258,6 +264,7 @@ class LocalFlowService:
                             session_id=self.id_factory("session"),
                             started_at=launch_started_at,
                             ended_at=launch_ended_at,
+                            command=redact_command_prompt(launch_result.command, prompt),
                         ),
                         "stdout_log": output_paths["stdout"],
                         "stderr_log": output_paths["stderr"],
@@ -448,6 +455,7 @@ class LocalFlowService:
                 )
             )
             ended_at = self.clock()
+            redacted_command = redact_command_prompt(launch.command, prompt)
             record_without_paths = PhaseExecutionRecord(
                 execution_id=execution_id,
                 phase=run.current_phase,
@@ -455,7 +463,7 @@ class LocalFlowService:
                 execution_mode=launch.execution_mode,
                 status=launch.status,
                 returncode=launch.returncode,
-                command=launch.command,
+                command=redacted_command,
                 cwd=launch.cwd,
                 started_at=started_at,
                 ended_at=ended_at,
@@ -479,7 +487,7 @@ class LocalFlowService:
                     execution_mode=launch.execution_mode,
                     status=launch.status,
                     returncode=launch.returncode,
-                    command=launch.command,
+                    command=redacted_command,
                     cwd=launch.cwd,
                     started_at=started_at,
                     ended_at=ended_at,
@@ -896,6 +904,19 @@ class LocalFlowService:
                         )
                         continue
                     errors.append(f"Agent '{agent.id}' has unknown requirement '{requirement}'.")
+        return errors
+
+    def _workflow_artifact_errors(self, spec: WorkflowSpec) -> list[str]:
+        errors: list[str] = []
+        for phase in spec.phases:
+            for artifact in phase.required_artifacts:
+                try:
+                    validate_artifact_reference(artifact)
+                except ArtifactPathError as exc:
+                    errors.append(
+                        f"Phase '{phase.id.value}' has invalid required artifact "
+                        f"'{artifact}': {exc}"
+                    )
         return errors
 
     def _stored_workflow(self, run: FlowRun) -> WorkflowSpec | None:

@@ -164,6 +164,30 @@ def test_flow_shipper_rejects_missing_or_invalid_repos(tmp_path: Path) -> None:
         _ship(feature_dir, repos=["api"])
 
 
+@pytest.mark.parametrize("repo", ["../outside", "/tmp/outside", ".", " "])
+def test_flow_shipper_rejects_repo_paths_outside_feature_workspace(
+    tmp_path: Path,
+    repo: str,
+) -> None:
+    feature_dir = tmp_path / "_wt" / "feat"
+    outside = _init_repo(tmp_path / "_wt" / "outside")
+    feature_dir.mkdir(parents=True)
+
+    assert outside.is_dir()
+    with pytest.raises(FlowShipError, match="inside feature workspace|must not be empty"):
+        _ship(feature_dir, repos=[repo])
+
+
+def test_flow_shipper_rejects_symlinked_repo_escape(tmp_path: Path) -> None:
+    feature_dir = tmp_path / "_wt" / "feat"
+    outside = _init_repo(tmp_path / "_wt" / "outside")
+    feature_dir.mkdir(parents=True)
+    (feature_dir / "linked").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(FlowShipError, match="inside feature workspace"):
+        _ship(feature_dir, repos=["linked"])
+
+
 def test_flow_shipper_commits_pushes_and_reuses_existing_pr(tmp_path: Path) -> None:
     feature_dir = tmp_path / "_wt" / "feat"
     _init_repo(feature_dir / "api")

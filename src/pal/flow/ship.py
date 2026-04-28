@@ -111,7 +111,8 @@ class FlowShipper:
         create_pr: bool,
         draft: bool,
     ) -> FlowShipSummary:
-        repo_names = self._repo_names(feature_dir, repos)
+        feature_dir = feature_dir.resolve()
+        repo_paths = self._repo_paths(feature_dir, repos)
         return FlowShipSummary(
             feature=feature,
             run_id=run_id,
@@ -125,7 +126,7 @@ class FlowShipper:
             repos=[
                 self._ship_repo(
                     repo=repo,
-                    repo_path=feature_dir / repo,
+                    repo_path=repo_path,
                     base=base,
                     title=title,
                     body_file=body_file,
@@ -136,12 +137,12 @@ class FlowShipper:
                     create_pr=create_pr,
                     draft=draft,
                 )
-                for repo in repo_names
+                for repo, repo_path in repo_paths
             ],
         )
 
-    def _repo_names(self, feature_dir: Path, repos: list[str]) -> list[str]:
-        repo_names = list(dict.fromkeys(repos))
+    def _repo_paths(self, feature_dir: Path, repos: list[str]) -> list[tuple[str, Path]]:
+        repo_names = list(dict.fromkeys(repo.strip() for repo in repos))
         if not repo_names:
             repo_names = sorted(
                 child.name
@@ -150,13 +151,15 @@ class FlowShipper:
             )
         if not repo_names:
             raise FlowShipError(f"No git repos found in feature workspace: {feature_dir}")
+        repo_paths: list[tuple[str, Path]] = []
         for repo in repo_names:
-            repo_path = feature_dir / repo
+            repo_path = _repo_path(feature_dir, repo)
             if not repo_path.exists():
                 raise FlowShipError(f"Repo worktree '{repo}' not found at {repo_path}.")
             if not is_git_repo(repo_path):
                 raise FlowShipError(f"Repo worktree '{repo}' is not a git repo: {repo_path}")
-        return repo_names
+            repo_paths.append((repo, repo_path))
+        return repo_paths
 
     def _ship_repo(
         self,
@@ -318,3 +321,22 @@ class FlowShipper:
 def _command_error(command: str, stderr: str) -> str:
     detail = stderr.strip() or "no stderr"
     return f"{command} failed: {detail}"
+
+
+def _repo_path(feature_dir: Path, repo: str) -> Path:
+    name = repo.strip()
+    if not name:
+        raise FlowShipError("Repo name must not be empty.")
+    candidate = Path(name)
+    if (
+        not candidate.parts
+        or candidate.is_absolute()
+        or any(part == ".." for part in candidate.parts)
+    ):
+        raise FlowShipError(f"Repo worktree must stay inside feature workspace: {repo}")
+    resolved = (feature_dir / candidate).resolve()
+    try:
+        resolved.relative_to(feature_dir)
+    except ValueError as exc:
+        raise FlowShipError(f"Repo worktree must stay inside feature workspace: {repo}") from exc
+    return resolved

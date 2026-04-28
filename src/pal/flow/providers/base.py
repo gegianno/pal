@@ -111,13 +111,20 @@ class ProviderLaunchResult:
     stderr: str
     diagnostics: dict[str, Any] = field(default_factory=dict)
 
-    def to_session_dict(self, *, session_id: str, started_at: str, ended_at: str) -> dict[str, Any]:
+    def to_session_dict(
+        self,
+        *,
+        session_id: str,
+        started_at: str,
+        ended_at: str,
+        command: list[str] | None = None,
+    ) -> dict[str, Any]:
         return {
             "session_id": session_id,
             "provider": self.provider,
             "execution_mode": self.execution_mode,
             "cwd": self.cwd,
-            "launch_command": list(self.command),
+            "launch_command": list(command if command is not None else self.command),
             "started_at": started_at,
             "ended_at": ended_at,
             "status": self.status,

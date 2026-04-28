@@ -782,8 +782,9 @@ def flow_watch(
     if max_polls is not None and max_polls < 0:
         raise typer.BadParameter("--max-polls must be non-negative.")
     service = _service_from_options(root, worktree_root, branch_prefix)
-    _load_run_or_error(service, feature, run_id)
-    events = service.events(feature, run_id)
+    run = _load_run_or_error(service, feature, run_id)
+    resolved_run_id = run.run_id
+    events = service.events(feature, resolved_run_id)
     if not events:
         console.print("[yellow]No events recorded.[/yellow]")
     else:
@@ -792,7 +793,7 @@ def flow_watch(
         _follow_events(
             service,
             feature,
-            run_id,
+            resolved_run_id,
             seen_ids={event.id for event in events},
             poll_interval=poll_interval,
             max_polls=max_polls,

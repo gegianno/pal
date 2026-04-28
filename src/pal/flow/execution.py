@@ -154,6 +154,12 @@ def build_execution_prompt(brief: PhaseBrief, target: PhaseExecutionTarget) -> s
     return "\n".join(lines)
 
 
+def redact_command_prompt(command: list[str], prompt: str) -> list[str]:
+    if not prompt:
+        return list(command)
+    return ["<prompt>" if item == prompt else item for item in command]
+
+
 def execution_status(records: list[PhaseExecutionRecord]) -> str:
     return (
         "completed"

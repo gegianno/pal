@@ -213,13 +213,15 @@ logged-in accounts instead of API keys. Codex flow execution applies `[codex].sa
 `[codex].full_auto`, `[agent].add_dirs`, and `[codex].add_dirs` to `codex exec`. Claude flow
 execution applies `[claude].permission_mode`, `[claude].model`, `[claude].extra_args`,
 `[agent].add_dirs`, and `[claude].add_dirs` to `claude -p`. The Claude bypass-permission guardrail
-also applies to flow execution. Execution manifests include the exact command, working directory,
-provider status, return code, stdout/stderr paths, and provider diagnostics such as resolved
-executable, output directory, and prompt size.
+also applies to flow execution. Execution manifests include the redacted command shape, working
+directory, provider status, return code, stdout/stderr paths, and provider diagnostics such as
+resolved executable, output directory, and prompt size. Full prompts are stored separately in
+`prompt.md`.
 
-`pal flow artifacts <feature>` validates the current phase's `required_artifacts`. Relative artifact
-paths resolve under `.pal/artifacts`; an `artifacts/...` prefix is accepted and normalized there too.
-`pal flow advance` refuses to complete a phase with missing required artifacts unless
+`pal flow artifacts <feature>` validates the current phase's `required_artifacts`. Artifact paths
+must be relative, must not contain `..`, and always resolve under `.pal/artifacts`; an
+`artifacts/...` prefix is accepted and normalized there too. `pal flow advance` refuses to complete a
+phase with missing required artifacts unless
 `--force-artifacts` is passed.
 
 `pal flow ship <feature>` prepares review/PR handoff artifacts under `.pal/runs/<run-id>/ship/`.

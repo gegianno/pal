@@ -9,6 +9,7 @@ from pal.flow.execution import (
     build_execution_prompt,
     execution_status,
     phase_execution_targets,
+    redact_command_prompt,
 )
 from pal.flow.models import FlowPhase, FlowPolicy, FlowRun, FlowStatus
 from pal.flow.rendering import PhaseBrief, ResolvedPhaseAgent
@@ -191,3 +192,12 @@ def test_execution_status_requires_successful_records() -> None:
     data = _record().to_dict()
     assert data["target"]["agent_id"] == "designer"
     assert data["paths"]["manifest"] == "/tmp/manifest.json"
+
+
+def test_redact_command_prompt_replaces_exact_prompt_arguments() -> None:
+    assert redact_command_prompt(["codex", "exec", "secret prompt"], "secret prompt") == [
+        "codex",
+        "exec",
+        "<prompt>",
+    ]
+    assert redact_command_prompt(["codex", "exec", "safe"], "") == ["codex", "exec", "safe"]
