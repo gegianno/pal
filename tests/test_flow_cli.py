@@ -21,6 +21,36 @@ def _plain(output: str) -> str:
     return re.sub(r"\x1b\[[0-9;]*m", "", output)
 
 
+def _write_workflow(root: Path, name: str, body: str) -> Path:
+    path = root / ".pal" / "flows" / f"{name}.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def _valid_workflow() -> str:
+    return """
+version: 1
+name: dev-complex
+work_type: dev
+mode: complex
+repos:
+  - api
+defaults:
+  provider: fake
+phases:
+  - id: design
+    policy: co-driver
+    agents:
+      - id: designer
+        role: design
+        requires:
+          - local_headless
+  - id: implement
+    agents: []
+"""
+
+
 def test_flow_start_status_and_watch_commands(tmp_path: Path) -> None:
     result = runner.invoke(
         app,
@@ -122,6 +152,48 @@ def test_flow_start_headless_fake_records_completion(tmp_path: Path) -> None:
     assert "provider.completed" in watch.output
 
 
+def test_flow_start_with_workflow_uses_spec_defaults(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "dev-complex", _valid_workflow())
+    result = runner.invoke(
+        app,
+        ["flow", "start", "feat", "--root", str(tmp_path), "--workflow", "dev-complex"],
+    )
+    assert result.exit_code == 0, result.output
+
+    status = runner.invoke(app, ["flow", "status", "feat", "--root", str(tmp_path)])
+    assert status.exit_code == 0, status.output
+    assert "dev-complex" in status.output
+    assert "dev" in status.output
+    assert "complex" in status.output
+    assert "design" in status.output
+    assert "api" in status.output
+
+
+def test_flow_start_rejects_invalid_workflow(tmp_path: Path) -> None:
+    _write_workflow(
+        tmp_path,
+        "bad",
+        """
+version: 1
+name: bad
+work_type: dev
+defaults:
+  provider: missing
+phases:
+  - id: explore
+    agents: []
+""",
+    )
+
+    result = runner.invoke(
+        app,
+        ["flow", "start", "feat", "--root", str(tmp_path), "--workflow", "bad"],
+    )
+
+    assert result.exit_code != 0
+    assert "Workflow spec is invalid" in _plain(result.output)
+
+
 def test_flow_providers_preflights_all_registered_providers(tmp_path: Path) -> None:
     result = runner.invoke(app, ["flow", "providers", "--root", str(tmp_path)])
 
@@ -129,6 +201,47 @@ def test_flow_providers_preflights_all_registered_providers(tmp_path: Path) -> N
     assert "fake" in result.output
     assert "codex" in result.output
     assert "claude" in result.output
+
+
+def test_flow_validate_reports_no_specs(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["flow", "validate", "--root", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "No workflow specs found" in result.output
+
+
+def test_flow_validate_reports_valid_workflow(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "dev-complex", _valid_workflow())
+
+    result = runner.invoke(app, ["flow", "validate", "dev-complex", "--root", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "dev-complex" in result.output
+    assert "dev" in result.output
+    assert "valid" in result.output
+
+
+def test_flow_validate_reports_invalid_workflow_and_exits_nonzero(tmp_path: Path) -> None:
+    _write_workflow(
+        tmp_path,
+        "bad",
+        """
+version: 1
+name: bad
+work_type: dev
+defaults:
+  provider: missing
+phases:
+  - id: explore
+    agents: []
+""",
+    )
+
+    result = runner.invoke(app, ["flow", "validate", "--root", str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert "invalid" in result.output
+    assert "Unknown provider" in result.output
 
 
 def test_flow_status_reports_missing_run_as_bad_parameter(tmp_path: Path) -> None:

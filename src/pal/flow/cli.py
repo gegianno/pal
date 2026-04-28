@@ -11,6 +11,7 @@ from rich.table import Table
 from ..cli_config import cfg_from_options
 from .models import FlowPhase, FlowRun
 from .runtime import build_local_flow_service
+from .workflows.library import WorkflowSpecError
 
 
 flow_app = typer.Typer(help="Manage local agentic workflow runs.", no_args_is_help=True)
@@ -52,6 +53,13 @@ def _provider_or_error(service, provider: str):  # noqa: ANN001
         raise typer.BadParameter(str(exc)) from exc
 
 
+def _start_or_error(service, **kwargs):  # noqa: ANN001, ANN003
+    try:
+        return service.start(**kwargs)
+    except (ValueError, WorkflowSpecError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
 @flow_app.command("start")
 def flow_start(
     feature: str = typer.Argument(..., help="Feature workspace name."),
@@ -61,9 +69,15 @@ def flow_start(
         "-R",
         help="Repo included in this run. Repeatable.",
     ),
-    mode: str = typer.Option("routine", "--mode", help="Run mode: routine or complex."),
-    phase: str = typer.Option("explore", "--phase", help="Initial phase."),
-    provider: str = typer.Option("fake", "--provider", help="Provider: fake, codex, or claude."),
+    mode: Optional[str] = typer.Option(None, "--mode", help="Run mode: routine or complex."),
+    phase: Optional[str] = typer.Option(None, "--phase", help="Initial phase."),
+    provider: Optional[str] = typer.Option(None, "--provider", help="Provider override."),
+    workflow: Optional[str] = typer.Option(
+        None,
+        "--workflow",
+        "-w",
+        help="Workflow spec name or path under .pal/flows.",
+    ),
     headless: bool = typer.Option(False, "--headless", help="Run provider in local headless mode."),
     prompt: str = typer.Option("", "--prompt", help="Prompt for explicit headless provider runs."),
     root: Path = typer.Option(Path("."), "--root", "-r"),
@@ -72,17 +86,20 @@ def flow_start(
 ) -> None:
     """Start a local flow run with durable state and events."""
     service = _service_from_options(root, worktree_root, branch_prefix)
-    _provider_or_error(service, provider)
+    if provider:
+        _provider_or_error(service, provider)
     if headless and not prompt.strip():
         raise typer.BadParameter("--prompt is required when --headless is set.")
-    run = service.start(
+    run = _start_or_error(
+        service,
         feature=feature,
         repos=list(repos or []),
         mode=mode,
-        phase=_parse_phase(phase),
+        phase=_parse_phase(phase) if phase else None,
         provider_name=provider,
         headless=headless,
         prompt=prompt,
+        workflow=workflow,
     )
     console.print(
         Panel.fit(
@@ -113,6 +130,9 @@ def flow_status(
     table.add_row("mode", run.mode)
     table.add_row("phase", run.current_phase.value)
     table.add_row("status", run.status.value)
+    if run.workflow_name:
+        table.add_row("workflow", run.workflow_name)
+        table.add_row("work_type", run.work_type)
     table.add_row("repos", ", ".join(run.repos) if run.repos else "(none)")
     table.add_row("artifact_root", run.artifact_root)
     console.print(table)
@@ -141,6 +161,41 @@ def flow_providers(
             ", ".join(preflight.capabilities.execution_modes),
         )
     console.print(table)
+
+
+@flow_app.command("validate")
+def flow_validate(
+    workflow: Optional[str] = typer.Argument(
+        None, help="Workflow spec name/path. Defaults to all."
+    ),
+    root: Path = typer.Option(Path("."), "--root", "-r"),
+    worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
+    branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
+) -> None:
+    """Validate checked-in workflow specs without launching agents."""
+    service = _service_from_options(root, worktree_root, branch_prefix)
+    results = [service.validate_workflow(workflow)] if workflow else service.validate_workflows()
+    if not results:
+        console.print("[yellow]No workflow specs found.[/yellow]")
+        return
+
+    table = Table(title="Flow workflow validation", header_style="bold")
+    table.add_column("Workflow")
+    table.add_column("Work Type")
+    table.add_column("Path")
+    table.add_column("Status")
+    table.add_column("Errors")
+    for result in results:
+        table.add_row(
+            result.name or "(unknown)",
+            result.work_type or "(unknown)",
+            str(result.path),
+            "valid" if result.valid else "invalid",
+            "; ".join(result.errors),
+        )
+    console.print(table)
+    if any(not result.valid for result in results):
+        raise typer.Exit(1)
 
 
 @flow_app.command("watch")

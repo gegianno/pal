@@ -5,6 +5,7 @@ from .providers.codex import CodexFlowProvider
 from .providers.fake import FakeFlowProvider
 from .service import LocalFlowService
 from .store import LocalFlowStore
+from .workflows.library import LocalWorkflowLibrary
 
 
 def build_local_flow_service(cfg) -> LocalFlowService:  # noqa: ANN001
@@ -16,4 +17,5 @@ def build_local_flow_service(cfg) -> LocalFlowService:  # noqa: ANN001
             "claude": ClaudeFlowProvider(),
         },
         default_provider="fake",
+        workflow_library=LocalWorkflowLibrary(cfg.root),
     )

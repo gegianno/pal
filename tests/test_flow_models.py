@@ -24,6 +24,8 @@ def test_flow_run_round_trips_with_policy_and_pr_fields() -> None:
         created_at="2026-04-27T00:00:00Z",
         updated_at="2026-04-27T00:00:01Z",
         pr_urls=["https://example.test/pr/1"],
+        workflow_name="dev-complex",
+        work_type="dev",
     )
 
     parsed = FlowRun.from_dict(run.to_dict())
@@ -49,6 +51,8 @@ def test_flow_run_from_dict_accepts_missing_optional_fields() -> None:
     assert parsed.current_phase == FlowPhase.DESIGN
     assert parsed.policies == {}
     assert parsed.pr_urls == []
+    assert parsed.workflow_name == ""
+    assert parsed.work_type == ""
 
 
 def test_flow_event_round_trips_with_and_without_phase() -> None:

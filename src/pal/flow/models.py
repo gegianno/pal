@@ -51,6 +51,8 @@ class FlowRun:
     created_at: str
     updated_at: str
     pr_urls: list[str] = field(default_factory=list)
+    workflow_name: str = ""
+    work_type: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -65,6 +67,8 @@ class FlowRun:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "pr_urls": list(self.pr_urls),
+            "workflow_name": self.workflow_name,
+            "work_type": self.work_type,
         }
 
     @classmethod
@@ -84,6 +88,8 @@ class FlowRun:
             created_at=str(data["created_at"]),
             updated_at=str(data["updated_at"]),
             pr_urls=[str(url) for url in data.get("pr_urls", [])],
+            workflow_name=str(data.get("workflow_name", "")),
+            work_type=str(data.get("work_type", "")),
         )
 
 

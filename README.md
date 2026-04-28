@@ -96,6 +96,65 @@ Terminal tabs:
 
 ---
 
+## Agentic flow specs
+
+`pal flow` is the local-first workflow layer for checked-in agentic development flows. Specs live
+in `.pal/flows/*.yaml` inside the project root, so teams can iterate on phases, policies, agents,
+providers, artifacts, and transitions without changing `pal` code.
+
+Example `.pal/flows/dev-complex.yaml`:
+
+```yaml
+version: 1
+name: dev-complex
+work_type: dev
+mode: complex
+repos:
+  - api
+defaults:
+  provider: codex
+phases:
+  - id: explore
+    policy: co-driver
+    required_artifacts:
+      - artifacts/explore.md
+    transitions:
+      - on: complete
+        to: design
+      - on: blocked
+        to: design
+    agents:
+      - id: codebase-explorer
+        role: codebase exploration
+        provider: codex
+        prompt: Inspect the relevant repos and identify risks.
+        produces:
+          - artifacts/explore.md
+        requires:
+          - local_headless
+          - json_output
+  - id: design
+    policy: supervisor
+    requires_approval: true
+    agents: []
+```
+
+Validate specs and start a workflow-backed run:
+
+```bash
+pal flow providers
+pal flow validate dev-complex
+pal flow start feat-auth --workflow dev-complex
+pal flow status feat-auth
+pal flow watch feat-auth
+```
+
+Provider execution is still explicit and safe by default: `pal flow start` records durable run state
+and provider preflight metadata, but only runs a local headless agent when `--headless --prompt ...`
+is passed.
+
+---
+
 ## Agent defaults (important)
 
 When you run Codex via `pal run ... codex` (or `pal plan` / `pal implement`), `pal` launches it with:
@@ -217,6 +276,11 @@ pal rename <old_feature> <new_feature>
 pal run <feature> <agent> [agent args...]
 pal plan <feature> <agent> [agent args...]
 pal implement <feature> <agent> [agent args...]
+pal flow providers
+pal flow validate [workflow]
+pal flow start <feature> [--workflow workflow]
+pal flow status <feature>
+pal flow watch <feature>
 pal rm <feature> [--repo repo...]
 pal config init
 pal config show
