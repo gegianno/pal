@@ -108,6 +108,7 @@ Create a starter spec:
 pal flow init --list-templates
 pal flow init dev-complex --template dev-complex --provider codex --repo api --repo web
 pal flow init dev-routine --template dev-routine --provider claude
+pal flow inspect dev-complex
 ```
 
 Example `.pal/flows/dev-complex.yaml`:
@@ -153,6 +154,7 @@ Validate specs and start a workflow-backed run:
 pal flow providers
 pal flow init dev-complex --template dev-complex --provider codex --repo api
 pal flow validate dev-complex
+pal flow inspect dev-complex
 pal flow start feat-auth --workflow dev-complex
 pal flow start feat-auth --workflow dev-complex --workspace reuse
 pal flow render feat-auth
@@ -163,8 +165,9 @@ pal flow approve feat-auth
 pal flow advance feat-auth
 pal flow block feat-auth --reason "implementation hit a dependency issue"
 pal flow replan feat-auth
+pal flow ship feat-auth --dry-run
 pal flow status feat-auth
-pal flow watch feat-auth
+pal flow watch feat-auth --follow
 ```
 
 Provider execution is still explicit and safe by default: `pal flow start` records durable run state
@@ -180,6 +183,19 @@ exist. Prepared workspace metadata is stored in `.pal/runs/<run-id>/workspace.js
 Phase progression is explicit too. `advance` follows workflow transitions, `approve` satisfies
 `requires_approval: true` gates, and `block`/`replan` records replanning loops without hiding them
 inside agent output.
+
+Workflow specs are intentionally template-like YAML:
+
+- `version`, `name`, `work_type`, `mode`, and `repos` describe the workflow identity and default repo
+  set.
+- `defaults.provider` selects the local provider adapter (`codex`, `claude`, or `fake` in tests).
+- Each `phase` has an `id`, `policy`, optional `requires_approval`, `required_artifacts`, and
+  `transitions`.
+- Each phase `agent` has an `id`, `role`, optional provider override, prompt, produced artifacts,
+  and capability requirements such as `local_headless` or `json_output`.
+
+Use `pal flow inspect <workflow>` after edits to review the resolved phase/agent structure, then
+`pal flow validate <workflow>` to catch unsupported providers or capability requirements.
 
 `pal flow render <feature>` compiles the current phase into durable
 `.pal/runs/<run-id>/phase/<phase>/brief.md` and `brief.json` artifacts. The brief includes run
@@ -197,12 +213,20 @@ logged-in accounts instead of API keys. Codex flow execution applies `[codex].sa
 `[codex].full_auto`, `[agent].add_dirs`, and `[codex].add_dirs` to `codex exec`. Claude flow
 execution applies `[claude].permission_mode`, `[claude].model`, `[claude].extra_args`,
 `[agent].add_dirs`, and `[claude].add_dirs` to `claude -p`. The Claude bypass-permission guardrail
-also applies to flow execution.
+also applies to flow execution. Execution manifests include the exact command, working directory,
+provider status, return code, stdout/stderr paths, and provider diagnostics such as resolved
+executable, output directory, and prompt size.
 
 `pal flow artifacts <feature>` validates the current phase's `required_artifacts`. Relative artifact
 paths resolve under `.pal/artifacts`; an `artifacts/...` prefix is accepted and normalized there too.
 `pal flow advance` refuses to complete a phase with missing required artifacts unless
 `--force-artifacts` is passed.
+
+`pal flow ship <feature>` prepares review/PR handoff artifacts under `.pal/runs/<run-id>/ship/`.
+By default it is a safe dry run that records repo status, branch, diff stats, and the action plan.
+When explicitly requested, it can commit (`--commit --message ...`), push (`--push`), and create or
+reuse GitHub PRs through the local `gh` CLI (`--create-pr --no-dry-run`). Failures are recorded in
+the durable ship manifest instead of being hidden in terminal output.
 
 `pal flow run <feature>` is the policy-aware phase loop:
 
@@ -213,7 +237,10 @@ paths resolve under `.pal/artifacts`; an `artifacts/...` prefix is accepted and 
   missing artifact, or `--max-phases`.
 
 Local hooks can be configured in `.pal.toml` and run after matching flow events. Hook results are
-recorded in `.pal/runs/<run-id>/hooks.jsonl`; hook failures do not fail the flow command.
+recorded in `.pal/runs/<run-id>/hooks.jsonl`; hook failures do not fail the flow command. Hook
+commands receive event JSON plus run context in environment variables such as `PAL_FLOW_EVENT_JSON`,
+`PAL_FLOW_RUN_JSON`, `PAL_FLOW_WORKFLOW`, `PAL_FLOW_WORK_TYPE`, `PAL_FLOW_REPOS`, and
+`PAL_FLOW_ARTIFACT_ROOT`.
 
 ```toml
 [[flow.hooks]]
@@ -348,6 +375,7 @@ pal implement <feature> <agent> [agent args...]
 pal flow init [workflow] [--template dev-complex|dev-routine]
 pal flow providers
 pal flow validate [workflow]
+pal flow inspect <workflow>
 pal flow start <feature> [--workflow workflow] [--workspace state-only|create|reuse|validate]
 pal flow render <feature>
 pal flow execute <feature>
@@ -357,8 +385,9 @@ pal flow approve <feature>
 pal flow advance <feature> [--force-artifacts]
 pal flow block <feature> --reason <reason>
 pal flow replan <feature>
+pal flow ship <feature> [--commit --message msg] [--push] [--create-pr]
 pal flow status <feature>
-pal flow watch <feature>
+pal flow watch <feature> [--follow]
 pal rm <feature> [--repo repo...]
 pal config init
 pal config show

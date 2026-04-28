@@ -53,6 +53,9 @@ class LocalFlowStore:
     ) -> Path:
         return self.phase_dir(feature, run_id, phase) / "executions" / execution_id
 
+    def ship_dir(self, feature: str, run_id: str) -> Path:
+        return self.run_dir(feature, run_id) / "ship"
+
     def create_run(self, run: FlowRun) -> None:
         run_dir = self.run_dir(run.feature, run.run_id)
         run_dir.mkdir(parents=True, exist_ok=False)
@@ -151,6 +154,20 @@ class LocalFlowStore:
             encoding="utf-8",
         )
         return paths
+
+    def write_ship_body(self, run: FlowRun, body: str) -> str:
+        ship_dir = self.ship_dir(run.feature, run.run_id)
+        ship_dir.mkdir(parents=True, exist_ok=True)
+        path = ship_dir / "body.md"
+        path.write_text(body, encoding="utf-8")
+        return str(path)
+
+    def write_ship_manifest(self, run: FlowRun, manifest: dict[str, object]) -> str:
+        ship_dir = self.ship_dir(run.feature, run.run_id)
+        ship_dir.mkdir(parents=True, exist_ok=True)
+        path = ship_dir / "manifest.json"
+        path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return str(path)
 
     def load_state(self, feature: str, run_id: str) -> FlowRun:
         data = json.loads(self.state_path(feature, run_id).read_text(encoding="utf-8"))

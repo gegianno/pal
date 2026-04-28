@@ -18,6 +18,7 @@ from .models import FlowEvent, FlowPhase, FlowPolicy, FlowRun, FlowStatus, new_i
 from .policy import auto_advance_allowed, ensure_execution_allowed, phase_policy
 from .providers.base import FlowProvider, ProviderLaunchRequest, ProviderPreflight
 from .rendering import PhaseBrief, build_phase_brief
+from .ship import FlowShipSummary, FlowShipper
 from .store import LocalFlowStore
 from .workflows.library import LocalWorkflowLibrary, WorkflowSpecError
 from .workflows.models import WorkflowSpec, WorkflowValidationResult
@@ -58,6 +59,7 @@ class LocalFlowService:
         workflow_library: LocalWorkflowLibrary | None = None,
         workspace_backend: WorkspaceBackend | None = None,
         hooks: FlowHookDispatcher | None = None,
+        shipper: FlowShipper | None = None,
         clock: Callable[[], str] = utc_now,
         id_factory: Callable[[str], str] = new_id,
     ) -> None:
@@ -67,6 +69,7 @@ class LocalFlowService:
         self.workflow_library = workflow_library
         self.workspace_backend = workspace_backend
         self.hooks = hooks or FlowHookDispatcher()
+        self.shipper = shipper or FlowShipper()
         self.clock = clock
         self.id_factory = id_factory
 
@@ -285,6 +288,54 @@ class LocalFlowService:
     def hook_results(self, feature: str, run_id: str | None = None) -> list[object]:
         return self.store.read_hook_results(feature, run_id)
 
+    def ship(
+        self,
+        feature: str,
+        *,
+        run_id: str | None = None,
+        repos: list[str] | None = None,
+        base: str = "main",
+        title: str = "",
+        body: str = "",
+        dry_run: bool = True,
+        commit: bool = False,
+        commit_message: str = "",
+        push: bool = False,
+        create_pr: bool = False,
+        draft: bool = False,
+    ) -> FlowShipSummary:
+        run = self.status(feature, run_id)
+        if commit and not commit_message.strip():
+            raise ValueError("--message is required when --commit is set.")
+        normalized_title = title.strip() or f"{run.feature}: {run.workflow_name or run.mode}"
+        normalized_body = body.strip() or self._default_ship_body(run)
+        body_path = self.store.write_ship_body(run, normalized_body + "\n")
+        summary = self.shipper.ship(
+            feature=run.feature,
+            run_id=run.run_id,
+            feature_dir=self.store.feature_dir(run.feature),
+            repos=list(repos or run.repos),
+            base=base.strip() or "main",
+            title=normalized_title,
+            body_file=Path(body_path),
+            dry_run=dry_run,
+            commit=commit,
+            commit_message=commit_message.strip(),
+            push=push,
+            create_pr=create_pr,
+            draft=draft,
+        )
+        manifest_path = self.store.ship_dir(run.feature, run.run_id) / "manifest.json"
+        summary = summary.with_paths({"body": body_path, "manifest": str(manifest_path)})
+        self.store.write_ship_manifest(run, summary.to_dict())
+        self._append_event(
+            run,
+            event_type=f"flow.ship.{summary.status}",
+            actor="pal",
+            payload=summary.to_dict(),
+        )
+        return summary
+
     def check_artifacts(
         self,
         feature: str,
@@ -409,6 +460,7 @@ class LocalFlowService:
                 started_at=started_at,
                 ended_at=ended_at,
                 paths={},
+                diagnostics=launch.diagnostics,
             )
             paths = self.store.write_phase_execution(
                 run,
@@ -432,6 +484,7 @@ class LocalFlowService:
                     started_at=started_at,
                     ended_at=ended_at,
                     paths=paths,
+                    diagnostics=launch.diagnostics,
                 )
             )
 
@@ -792,6 +845,25 @@ class LocalFlowService:
             payload=summary.to_dict(),
         )
         return summary
+
+    def _default_ship_body(self, run: FlowRun) -> str:
+        lines = [
+            f"# {run.feature}",
+            "",
+            "## pal flow",
+            "",
+            f"- Run ID: `{run.run_id}`",
+            f"- Status: `{run.status.value}`",
+            f"- Current phase: `{run.current_phase.value}`",
+            f"- Mode: `{run.mode}`",
+        ]
+        if run.workflow_name:
+            lines.append(f"- Workflow: `{run.workflow_name}`")
+        if run.work_type:
+            lines.append(f"- Work type: `{run.work_type}`")
+        if run.repos:
+            lines.append(f"- Repos: {', '.join(f'`{repo}`' for repo in run.repos)}")
+        return "\n".join(lines)
 
     def _workflow_provider_errors(self, spec: WorkflowSpec) -> list[str]:
         errors: list[str] = []

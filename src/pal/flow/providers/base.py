@@ -109,6 +109,7 @@ class ProviderLaunchResult:
     returncode: int
     stdout: str
     stderr: str
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
     def to_session_dict(self, *, session_id: str, started_at: str, ended_at: str) -> dict[str, Any]:
         return {
@@ -121,6 +122,7 @@ class ProviderLaunchResult:
             "ended_at": ended_at,
             "status": self.status,
             "returncode": self.returncode,
+            "diagnostics": dict(self.diagnostics),
         }
 
 

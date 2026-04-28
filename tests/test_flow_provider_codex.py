@@ -111,6 +111,9 @@ def test_codex_start_and_headless_launch(tmp_path: Path) -> None:
         "Summarize",
     ]
     assert launch.stdout == '{"event":"done"}\n'
+    assert launch.diagnostics["executable"] == "/bin/codex"
+    assert launch.diagnostics["prompt_chars"] == len("Summarize")
+    assert launch.diagnostics["error"] == ""
 
 
 def test_codex_headless_command_respects_full_auto(tmp_path: Path) -> None:
@@ -141,3 +144,19 @@ def test_codex_headless_launch_failure_status(tmp_path: Path) -> None:
 
     assert launch.status == "failed"
     assert launch.returncode == 2
+
+
+def test_codex_headless_launch_reports_missing_cli(tmp_path: Path) -> None:
+    launch = CodexFlowProvider(FakeRunner(executable=None)).launch_headless(
+        ProviderLaunchRequest(
+            run=_run(),
+            workspace_dir=tmp_path,
+            prompt="Summarize",
+            output_dir=tmp_path / "latest",
+        )
+    )
+
+    assert launch.status == "failed"
+    assert launch.returncode == 127
+    assert "codex CLI not found" in launch.stderr
+    assert launch.diagnostics["error"] == "missing_executable"

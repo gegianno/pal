@@ -26,6 +26,10 @@ This project aims to follow Keep a Changelog and Semantic Versioning.
   sandbox/permission modes, models, extra args, and writable roots.
 - Add `pal flow init` with built-in `dev-complex` and `dev-routine` workflow templates for checked-in
   flow scaffolding.
+- Add `pal flow ship` for durable shipping manifests plus explicit commit, push, and GitHub PR
+  creation actions.
+- Add `pal flow inspect`, `pal flow watch --follow`, richer hook environment payloads, and provider
+  execution diagnostics in manifests.
 
 ## 0.2.0
 

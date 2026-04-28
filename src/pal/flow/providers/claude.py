@@ -108,6 +108,20 @@ class ClaudeFlowProvider:
 
     def launch_headless(self, request: ProviderLaunchRequest) -> ProviderLaunchResult:
         command = self.headless_command(request.workspace_dir, request.prompt)
+        if not self.runner.which("claude"):
+            return ProviderLaunchResult(
+                provider=self.name,
+                execution_mode="local_headless",
+                command=command,
+                cwd=str(request.workspace_dir),
+                status="failed",
+                returncode=127,
+                stdout="",
+                stderr=(
+                    "claude CLI not found on PATH. Install Claude Code or log in before execution."
+                ),
+                diagnostics=_launch_diagnostics(command, request, error="missing_executable"),
+            )
         result = self.runner.run(command, cwd=request.workspace_dir)
         return ProviderLaunchResult(
             provider=self.name,
@@ -118,6 +132,7 @@ class ClaudeFlowProvider:
             returncode=result.returncode,
             stdout=result.stdout,
             stderr=result.stderr,
+            diagnostics=_launch_diagnostics(command, request),
         )
 
     def _effective_add_dirs(self) -> list[str]:
@@ -166,3 +181,18 @@ def _validate_permissions(claude: ClaudeConfig, args: list[str]) -> None:
             "Bypass permissions mode is disabled by config "
             "([claude].allow_bypass_permissions=false)."
         )
+
+
+def _launch_diagnostics(
+    command: list[str],
+    request: ProviderLaunchRequest,
+    *,
+    error: str = "",
+) -> dict[str, object]:
+    return {
+        "executable": command[0] if command else "",
+        "workspace_dir": str(request.workspace_dir),
+        "output_dir": str(request.output_dir),
+        "prompt_chars": len(request.prompt),
+        "error": error,
+    }

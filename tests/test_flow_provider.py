@@ -57,11 +57,10 @@ def test_fake_provider_capabilities_preflight_and_headless_launch(tmp_path: Path
 
     assert result.status == "completed"
     assert result.command == ["fake-flow-provider", "hello"]
-    assert (
-        result.to_session_dict(
-            session_id="session_1",
-            started_at="start",
-            ended_at="end",
-        )["session_id"]
-        == "session_1"
+    session = result.to_session_dict(
+        session_id="session_1",
+        started_at="start",
+        ended_at="end",
     )
+    assert session["session_id"] == "session_1"
+    assert session["diagnostics"]["prompt_chars"] == len("hello")

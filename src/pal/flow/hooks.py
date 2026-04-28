@@ -137,11 +137,19 @@ def _hook_env(event: FlowEvent, run: FlowRun) -> dict[str, str]:
     env.update(
         {
             "PAL_FLOW_EVENT_JSON": json.dumps(event.to_dict(), sort_keys=True),
+            "PAL_FLOW_EVENT_PAYLOAD_JSON": json.dumps(event.payload, sort_keys=True),
             "PAL_FLOW_EVENT_ID": event.id,
             "PAL_FLOW_EVENT_TYPE": event.type,
+            "PAL_FLOW_RUN_JSON": json.dumps(run.to_dict(), sort_keys=True),
             "PAL_FLOW_RUN_ID": run.run_id,
             "PAL_FLOW_FEATURE": run.feature,
             "PAL_FLOW_PHASE": event.phase.value if event.phase else "",
+            "PAL_FLOW_STATUS": run.status.value,
+            "PAL_FLOW_MODE": run.mode,
+            "PAL_FLOW_WORKFLOW": run.workflow_name,
+            "PAL_FLOW_WORK_TYPE": run.work_type,
+            "PAL_FLOW_REPOS": "\n".join(run.repos),
+            "PAL_FLOW_ARTIFACT_ROOT": run.artifact_root,
         }
     )
     return env

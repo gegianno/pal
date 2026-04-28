@@ -103,6 +103,9 @@ def test_claude_start_and_headless_launch(tmp_path: Path) -> None:
         "Summarize",
     ]
     assert runner.calls[-1][1] == tmp_path
+    assert launch.diagnostics["executable"] == "/bin/claude"
+    assert launch.diagnostics["prompt_chars"] == len("Summarize")
+    assert launch.diagnostics["error"] == ""
 
 
 def test_claude_headless_command_respects_explicit_extra_args(tmp_path: Path) -> None:
@@ -186,3 +189,19 @@ def test_claude_headless_launch_failure_status(tmp_path: Path) -> None:
 
     assert launch.status == "failed"
     assert launch.returncode == 2
+
+
+def test_claude_headless_launch_reports_missing_cli(tmp_path: Path) -> None:
+    launch = ClaudeFlowProvider(FakeRunner(executable=None)).launch_headless(
+        ProviderLaunchRequest(
+            run=_run(),
+            workspace_dir=tmp_path,
+            prompt="Summarize",
+            output_dir=tmp_path / "latest",
+        )
+    )
+
+    assert launch.status == "failed"
+    assert launch.returncode == 127
+    assert "claude CLI not found" in launch.stderr
+    assert launch.diagnostics["error"] == "missing_executable"

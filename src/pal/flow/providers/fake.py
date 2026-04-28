@@ -61,4 +61,11 @@ class FakeFlowProvider:
             returncode=0,
             stdout=f"fake provider completed run {request.run.run_id}\n",
             stderr="",
+            diagnostics={
+                "executable": "fake-flow-provider",
+                "workspace_dir": str(request.workspace_dir),
+                "output_dir": str(request.output_dir),
+                "prompt_chars": len(request.prompt),
+                "error": "",
+            },
         )

@@ -63,6 +63,7 @@ class PhaseExecutionRecord:
     started_at: str
     ended_at: str
     paths: dict[str, str]
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -77,6 +78,7 @@ class PhaseExecutionRecord:
             "started_at": self.started_at,
             "ended_at": self.ended_at,
             "paths": dict(self.paths),
+            "diagnostics": dict(self.diagnostics),
         }
 
 

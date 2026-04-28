@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+import time
 from typing import List, Optional
 
 import typer
@@ -104,6 +106,123 @@ def _print_workflow_template_table() -> None:
     for template in list_workflow_templates():
         table.add_row(template.name, template.mode, template.description)
     console.print(table)
+
+
+def _load_workflow_or_error(service, workflow: str):  # noqa: ANN001
+    try:
+        return service.load_workflow(workflow)
+    except WorkflowSpecError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def _print_workflow_inspection(spec) -> None:  # noqa: ANN001
+    console.print(
+        Panel.fit(
+            f"name: {spec.name}\n"
+            f"work_type: {spec.work_type}\n"
+            f"mode: {spec.mode}\n"
+            f"path: {spec.path}\n"
+            f"default_provider: {spec.defaults.provider or '(service default)'}\n"
+            f"repos: {', '.join(spec.repos) if spec.repos else '(none)'}",
+            title="pal flow workflow",
+        )
+    )
+    table = Table(title=f"Workflow phases: {spec.name}", header_style="bold")
+    table.add_column("#")
+    table.add_column("Phase")
+    table.add_column("Policy")
+    table.add_column("Provider")
+    table.add_column("Approval")
+    table.add_column("Agents")
+    table.add_column("Artifacts")
+    table.add_column("Transitions")
+    for index, phase in enumerate(spec.phases, start=1):
+        table.add_row(
+            str(index),
+            phase.id.value,
+            phase.policy.value,
+            phase.provider or spec.defaults.provider or "(default)",
+            "yes" if phase.requires_approval else "no",
+            ", ".join(f"{agent.id}({agent.provider})" for agent in phase.agents) or "(none)",
+            ", ".join(phase.required_artifacts) or "(none)",
+            ", ".join(f"{transition.on}->{transition.to.value}" for transition in phase.transitions)
+            or "(implicit complete)",
+        )
+    console.print(table)
+
+
+def _read_body_file(path: Path | None) -> str:
+    if not path:
+        return ""
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise typer.BadParameter(f"Cannot read body file '{path}': {exc}") from exc
+
+
+def _print_ship_summary(summary) -> None:  # noqa: ANN001
+    table = Table(title=f"Flow ship: {summary.feature}", header_style="bold")
+    table.add_column("Repo")
+    table.add_column("Changed")
+    table.add_column("Commit")
+    table.add_column("Push")
+    table.add_column("PR")
+    table.add_column("URL")
+    table.add_column("Error")
+    for repo in summary.repos:
+        table.add_row(
+            repo.repo,
+            "yes" if repo.changed else "no",
+            repo.commit_status,
+            repo.push_status,
+            repo.pr_status,
+            repo.pr_url,
+            repo.error,
+        )
+    console.print(table)
+    console.print(f"manifest: {summary.paths.get('manifest', '')}")
+
+
+def _print_events_table(feature: str, events: list) -> None:  # noqa: ANN001
+    table = Table(title=f"Flow events: {feature}", header_style="bold")
+    table.add_column("Time")
+    table.add_column("Type")
+    table.add_column("Actor")
+    table.add_column("Phase")
+    table.add_column("Summary")
+    for event in events:
+        table.add_row(
+            event.timestamp,
+            event.type,
+            event.actor,
+            event.phase.value if event.phase else "",
+            str(event.payload.get("summary", "")),
+        )
+    console.print(table)
+
+
+def _follow_should_continue(max_polls: int | None, polls: int) -> bool:
+    return max_polls is None or polls < max_polls
+
+
+def _follow_events(
+    service,  # noqa: ANN001
+    feature: str,
+    run_id: str | None,
+    *,
+    seen_ids: set[str],
+    poll_interval: float,
+    max_polls: int | None,
+) -> None:
+    polls = 0
+    while _follow_should_continue(max_polls, polls):
+        time.sleep(poll_interval)
+        polls += 1
+        events = service.events(feature, run_id)
+        new_events = [event for event in events if event.id not in seen_ids]
+        if new_events:
+            _print_events_table(feature, new_events)
+            seen_ids.update(event.id for event in new_events)
 
 
 @flow_app.command("init")
@@ -333,6 +452,23 @@ def flow_validate(
         raise typer.Exit(1)
 
 
+@flow_app.command("inspect")
+def flow_inspect(
+    workflow: str = typer.Argument(..., help="Workflow spec name/path."),
+    json_output: bool = typer.Option(False, "--json", help="Print workflow as JSON."),
+    root: Path = typer.Option(Path("."), "--root", "-r"),
+    worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
+    branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
+) -> None:
+    """Inspect phases, agents, policies, artifacts, and transitions in a workflow spec."""
+    service = _service_from_options(root, worktree_root, branch_prefix)
+    spec = _load_workflow_or_error(service, workflow)
+    if json_output:
+        console.print(json.dumps(spec.to_run_dict(), indent=2, sort_keys=True))
+        return
+    _print_workflow_inspection(spec)
+
+
 @flow_app.command("render")
 def flow_render(
     feature: str = typer.Argument(..., help="Feature workspace name."),
@@ -397,6 +533,57 @@ def flow_execute(
             title="pal flow executed",
         )
     )
+
+
+@flow_app.command("ship")
+def flow_ship(
+    feature: str = typer.Argument(..., help="Feature workspace name."),
+    repos: Optional[List[str]] = typer.Option(
+        None,
+        "--repo",
+        "-R",
+        help="Repo to include. Defaults to run repos or discovered feature repos.",
+    ),
+    base: str = typer.Option("main", "--base", help="PR base branch."),
+    title: str = typer.Option("", "--title", help="PR title. Defaults to feature/workflow."),
+    body: str = typer.Option("", "--body", help="PR body markdown."),
+    body_file: Optional[Path] = typer.Option(None, "--body-file", help="Read PR body markdown."),
+    commit: bool = typer.Option(False, "--commit", help="Commit all changes in selected repos."),
+    message: str = typer.Option("", "--message", "-m", help="Commit message for --commit."),
+    push: bool = typer.Option(False, "--push", help="Push selected repo branches."),
+    create_pr: bool = typer.Option(False, "--create-pr", help="Create or reuse GitHub PRs via gh."),
+    draft: bool = typer.Option(False, "--draft", help="Create draft PRs when --create-pr is set."),
+    dry_run: bool = typer.Option(
+        True,
+        "--dry-run/--no-dry-run",
+        help="Preview commit/push/PR actions without mutating repos.",
+    ),
+    run_id: Optional[str] = typer.Option(None, "--run-id", help="Run ID. Defaults to latest."),
+    root: Path = typer.Option(Path("."), "--root", "-r"),
+    worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
+    branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
+) -> None:
+    """Prepare shipping artifacts and optionally commit, push, and create PRs."""
+    service = _service_from_options(root, worktree_root, branch_prefix)
+    summary = _change_or_error(
+        service,
+        "ship",
+        feature,
+        run_id=run_id,
+        repos=list(repos or []),
+        base=base,
+        title=title,
+        body=_read_body_file(body_file) or body,
+        dry_run=dry_run,
+        commit=commit,
+        commit_message=message,
+        push=push,
+        create_pr=create_pr,
+        draft=draft,
+    )
+    _print_ship_summary(summary)
+    if summary.status != "completed":
+        raise typer.Exit(1)
 
 
 @flow_app.command("artifacts")
@@ -576,30 +763,37 @@ def flow_replan(
 @flow_app.command("watch")
 def flow_watch(
     feature: str = typer.Argument(..., help="Feature workspace name."),
+    follow: bool = typer.Option(False, "--follow", "-f", help="Poll and print new events."),
+    poll_interval: float = typer.Option(1.0, "--poll-interval", help="Seconds between polls."),
+    max_polls: Optional[int] = typer.Option(
+        None,
+        "--max-polls",
+        help="Testing guard for --follow.",
+        hidden=True,
+    ),
     run_id: Optional[str] = typer.Option(None, "--run-id", help="Run ID. Defaults to latest."),
     root: Path = typer.Option(Path("."), "--root", "-r"),
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
     branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
 ) -> None:
     """Print the recorded event stream for a local flow run."""
+    if poll_interval < 0:
+        raise typer.BadParameter("--poll-interval must be non-negative.")
+    if max_polls is not None and max_polls < 0:
+        raise typer.BadParameter("--max-polls must be non-negative.")
     service = _service_from_options(root, worktree_root, branch_prefix)
     _load_run_or_error(service, feature, run_id)
     events = service.events(feature, run_id)
     if not events:
         console.print("[yellow]No events recorded.[/yellow]")
-        return
-    table = Table(title=f"Flow events: {feature}", header_style="bold")
-    table.add_column("Time")
-    table.add_column("Type")
-    table.add_column("Actor")
-    table.add_column("Phase")
-    table.add_column("Summary")
-    for event in events:
-        table.add_row(
-            event.timestamp,
-            event.type,
-            event.actor,
-            event.phase.value if event.phase else "",
-            str(event.payload.get("summary", "")),
+    else:
+        _print_events_table(feature, events)
+    if follow:
+        _follow_events(
+            service,
+            feature,
+            run_id,
+            seen_ids={event.id for event in events},
+            poll_interval=poll_interval,
+            max_polls=max_polls,
         )
-    console.print(table)

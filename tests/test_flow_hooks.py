@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -38,13 +39,15 @@ def _run() -> FlowRun:
         run_id="run_1",
         feature="feat",
         mode="routine",
-        repos=[],
+        repos=["api"],
         current_phase=FlowPhase.EXPLORE,
         status=FlowStatus.RUNNING,
         policies={"explore": FlowPolicy.AUTONOMOUS},
         artifact_root="/tmp/artifacts",
         created_at="now",
         updated_at="now",
+        workflow_name="dev-routine",
+        work_type="dev",
     )
 
 
@@ -56,6 +59,7 @@ def _event(event_type: str = "flow.run.started") -> FlowEvent:
         timestamp="now",
         phase=FlowPhase.EXPLORE,
         actor="pal",
+        payload={"summary": "started"},
     )
 
 
@@ -80,6 +84,14 @@ def test_flow_hook_dispatcher_runs_matching_hooks_and_records_results(tmp_path: 
     assert runner.calls[0][0] == ["notify"]
     assert runner.calls[0][1] == store.feature_dir("feat")
     assert runner.calls[0][2]["PAL_FLOW_EVENT_TYPE"] == "flow.run.started"
+    assert runner.calls[0][2]["PAL_FLOW_STATUS"] == "running"
+    assert runner.calls[0][2]["PAL_FLOW_MODE"] == "routine"
+    assert runner.calls[0][2]["PAL_FLOW_WORKFLOW"] == "dev-routine"
+    assert runner.calls[0][2]["PAL_FLOW_WORK_TYPE"] == "dev"
+    assert runner.calls[0][2]["PAL_FLOW_REPOS"] == "api"
+    assert runner.calls[0][2]["PAL_FLOW_ARTIFACT_ROOT"] == "/tmp/artifacts"
+    assert json.loads(runner.calls[0][2]["PAL_FLOW_EVENT_PAYLOAD_JSON"]) == {"summary": "started"}
+    assert json.loads(runner.calls[0][2]["PAL_FLOW_RUN_JSON"])["workflow_name"] == "dev-routine"
     assert runner.calls[0][3] == 5
     assert store.read_hook_results("feat", "run_1")[0]["stdout"] == "notified\n"
 

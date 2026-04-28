@@ -9,6 +9,7 @@ from pal.flow.models import FlowPhase, FlowStatus
 from pal.flow.providers.base import ProviderLaunchRequest, ProviderLaunchResult
 from pal.flow.providers.fake import FakeFlowProvider
 from pal.flow.service import LocalFlowService, default_policies
+from pal.flow.ship import FlowShipRepo, FlowShipSummary
 from pal.flow.store import LocalFlowStore
 from pal.flow.workflows.library import LocalWorkflowLibrary, WorkflowSpecError
 from pal.workspaces import WorkspacePrepareResult, WorkspaceRepoResult
@@ -78,6 +79,40 @@ class RecordingWorkspaceBackend:
                     status="created",
                 )
                 for repo in repos
+            ],
+        )
+
+
+class RecordingShipper:
+    def __init__(self, *, failed: bool = False) -> None:
+        self.failed = failed
+        self.calls: list[dict[str, object]] = []
+
+    def ship(self, **kwargs):  # noqa: ANN003, ANN201
+        self.calls.append(dict(kwargs))
+        return FlowShipSummary(
+            feature=str(kwargs["feature"]),
+            run_id=str(kwargs["run_id"]),
+            base=str(kwargs["base"]),
+            title=str(kwargs["title"]),
+            dry_run=bool(kwargs["dry_run"]),
+            commit_requested=bool(kwargs["commit"]),
+            push_requested=bool(kwargs["push"]),
+            pr_requested=bool(kwargs["create_pr"]),
+            draft=bool(kwargs["draft"]),
+            repos=[
+                FlowShipRepo(
+                    repo="api",
+                    path="/tmp/_wt/feat/api",
+                    branch="feat/feat",
+                    base=str(kwargs["base"]),
+                    head_sha="abc123",
+                    changed=True,
+                    status_short="## feat/feat",
+                    porcelain=" M README.md",
+                    diff_stat="README.md | 1 +",
+                    error="failed" if self.failed else "",
+                )
             ],
         )
 
@@ -419,6 +454,74 @@ def test_flow_service_start_rejects_workspace_modes_without_backend(tmp_path: Pa
         service.start(feature="feat", repos=[], workspace_mode="reuse")
 
 
+def test_flow_service_ship_writes_body_manifest_and_event(tmp_path: Path) -> None:
+    shipper = RecordingShipper()
+    store = LocalFlowStore(tmp_path / "_wt")
+    service = LocalFlowService(
+        store=store,
+        providers={"fake": FakeFlowProvider()},
+        shipper=shipper,
+    )
+    run = service.start(feature="feat", repos=["api"], mode="complex")
+
+    summary = service.ship(
+        "feat",
+        base="develop",
+        title="",
+        body="custom body",
+        dry_run=False,
+        push=True,
+        create_pr=True,
+        draft=True,
+    )
+
+    body_path = store.ship_dir("feat", run.run_id) / "body.md"
+    manifest_path = store.ship_dir("feat", run.run_id) / "manifest.json"
+    assert summary.status == "completed"
+    assert shipper.calls[0]["repos"] == ["api"]
+    assert shipper.calls[0]["feature_dir"] == store.feature_dir("feat")
+    assert shipper.calls[0]["base"] == "develop"
+    assert shipper.calls[0]["title"] == "feat: complex"
+    assert body_path.read_text(encoding="utf-8") == "custom body\n"
+    assert manifest_path.is_file()
+    assert summary.paths == {"body": str(body_path), "manifest": str(manifest_path)}
+    assert service.events("feat")[-1].type == "flow.ship.completed"
+
+
+def test_flow_service_ship_uses_default_body_and_reports_failures(tmp_path: Path) -> None:
+    shipper = RecordingShipper(failed=True)
+    store = LocalFlowStore(tmp_path / "_wt")
+    _write_workflow(tmp_path, "dev-complex", _workflow_body())
+    service = LocalFlowService(
+        store=store,
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+        shipper=shipper,
+    )
+    run = service.start(feature="feat", repos=[], workflow="dev-complex")
+
+    summary = service.ship("feat", repos=["api"], base=" ", dry_run=True)
+
+    body = (store.ship_dir("feat", run.run_id) / "body.md").read_text(encoding="utf-8")
+    assert summary.status == "failed"
+    assert "Workflow: `dev-complex`" in body
+    assert "Work type: `dev`" in body
+    assert "Repos: `api`" in body
+    assert shipper.calls[0]["base"] == "main"
+    assert service.events("feat")[-1].type == "flow.ship.failed"
+
+
+def test_flow_service_ship_requires_message_when_committing(tmp_path: Path) -> None:
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+    )
+    service.start(feature="feat", repos=[])
+
+    with pytest.raises(ValueError, match="--message is required"):
+        service.ship("feat", commit=True, commit_message=" ")
+
+
 def test_flow_service_start_allows_cli_overrides_for_workflow(tmp_path: Path) -> None:
     _write_workflow(tmp_path, "dev-complex", _workflow_body())
     service = LocalFlowService(
@@ -615,6 +718,7 @@ def test_flow_service_execute_phase_runs_rendered_agents_and_records_artifacts(
     assert isinstance(manifest, dict)
     assert manifest["target"]["agent_id"] == "designer"
     assert manifest["paths"] == execution.paths
+    assert manifest["diagnostics"]["executable"] == "fake-flow-provider"
     assert [event.type for event in service.events("feat")][-3:] == [
         "flow.phase.rendered",
         "flow.phase.execution.started",
