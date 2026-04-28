@@ -15,8 +15,8 @@ def build_local_flow_service(cfg) -> LocalFlowService:  # noqa: ANN001
         store=LocalFlowStore(cfg.worktree_root),
         providers={
             "fake": FakeFlowProvider(),
-            "codex": CodexFlowProvider(),
-            "claude": ClaudeFlowProvider(),
+            "codex": CodexFlowProvider(codex=cfg.codex, agent_add_dirs=cfg.agent.add_dirs),
+            "claude": ClaudeFlowProvider(claude=cfg.claude, agent_add_dirs=cfg.agent.add_dirs),
         },
         default_provider="fake",
         workflow_library=LocalWorkflowLibrary(cfg.root),

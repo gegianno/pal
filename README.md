@@ -183,6 +183,13 @@ manifests under `.pal/runs/<run-id>/phase/<phase>/executions/<execution-id>/`. E
 durable, but V1 execution does not auto-advance the workflow; `approve`, `advance`, `block`, and
 `replan` remain explicit state changes.
 
+Flow provider execution uses the local Codex and Claude Code CLIs, so it can use your already
+logged-in accounts instead of API keys. Codex flow execution applies `[codex].sandbox`,
+`[codex].full_auto`, `[agent].add_dirs`, and `[codex].add_dirs` to `codex exec`. Claude flow
+execution applies `[claude].permission_mode`, `[claude].model`, `[claude].extra_args`,
+`[agent].add_dirs`, and `[claude].add_dirs` to `claude -p`. The Claude bypass-permission guardrail
+also applies to flow execution.
+
 `pal flow artifacts <feature>` validates the current phase's `required_artifacts`. Relative artifact
 paths resolve under `.pal/artifacts`; an `artifacts/...` prefix is accepted and normalized there too.
 `pal flow advance` refuses to complete a phase with missing required artifacts unless
@@ -331,7 +338,7 @@ pal plan <feature> <agent> [agent args...]
 pal implement <feature> <agent> [agent args...]
 pal flow providers
 pal flow validate [workflow]
-pal flow start <feature> [--workflow workflow]
+pal flow start <feature> [--workflow workflow] [--workspace state-only|create|reuse|validate]
 pal flow render <feature>
 pal flow execute <feature>
 pal flow artifacts <feature>

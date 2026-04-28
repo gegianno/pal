@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pal.config import CodexConfig
 from pal.flow.models import FlowPhase, FlowRun, FlowStatus
 from pal.flow.providers.base import CommandResult, ProviderLaunchRequest
 from pal.flow.providers.codex import CodexFlowProvider
@@ -77,7 +78,11 @@ def test_codex_preflight_records_nonzero_login_status() -> None:
 
 def test_codex_start_and_headless_launch(tmp_path: Path) -> None:
     runner = FakeRunner()
-    provider = CodexFlowProvider(runner)
+    provider = CodexFlowProvider(
+        runner,
+        codex=CodexConfig(sandbox="workspace-write", add_dirs=["cache", ""]),
+        agent_add_dirs=["/tmp/shared", "/tmp/shared"],
+    )
     start = provider.start(_run())
     launch = provider.launch_headless(
         ProviderLaunchRequest(
@@ -96,12 +101,27 @@ def test_codex_start_and_headless_launch(tmp_path: Path) -> None:
         "--cd",
         str(tmp_path),
         "--sandbox",
-        "read-only",
+        "workspace-write",
+        "--add-dir",
+        str(Path("/tmp/shared").resolve()),
+        "--add-dir",
+        str((tmp_path / "cache").resolve()),
         "--skip-git-repo-check",
         "--json",
         "Summarize",
     ]
     assert launch.stdout == '{"event":"done"}\n'
+
+
+def test_codex_headless_command_respects_full_auto(tmp_path: Path) -> None:
+    command = CodexFlowProvider(
+        FakeRunner(),
+        codex=CodexConfig(full_auto=True, add_dirs=["/tmp/codex"]),
+    ).headless_command(tmp_path, "Run")
+
+    assert "--full-auto" in command
+    assert "--sandbox" not in command
+    assert command[command.index("--add-dir") + 1] == str(Path("/tmp/codex").resolve())
 
 
 def test_codex_headless_launch_failure_status(tmp_path: Path) -> None:

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
+from ...config import CodexConfig
 from ..models import FlowRun
 from .base import (
     ProviderAuthProfile,
@@ -17,8 +19,16 @@ from .command import LocalCommandRunner
 class CodexFlowProvider:
     name = "codex"
 
-    def __init__(self, runner: LocalCommandRunner | None = None) -> None:
+    def __init__(
+        self,
+        runner: LocalCommandRunner | None = None,
+        *,
+        codex: CodexConfig | None = None,
+        agent_add_dirs: list[str] | None = None,
+    ) -> None:
         self.runner = runner or LocalCommandRunner()
+        self.codex = codex or CodexConfig()
+        self.agent_add_dirs = list(agent_add_dirs or [])
 
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
@@ -81,17 +91,26 @@ class CodexFlowProvider:
 
     def headless_command(self, workspace_dir: Path, prompt: str) -> list[str]:
         executable = self.runner.which("codex") or "codex"
-        return [
+        command = [
             executable,
             "exec",
             "--cd",
             str(workspace_dir),
-            "--sandbox",
-            "read-only",
+        ]
+        if self.codex.full_auto:
+            command.append("--full-auto")
+        else:
+            command += ["--sandbox", self.codex.sandbox]
+        for raw_dir in self._effective_add_dirs():
+            normalized = _normalize_add_dir(workspace_dir, raw_dir)
+            if normalized:
+                command += ["--add-dir", normalized]
+        command += [
             "--skip-git-repo-check",
             "--json",
             prompt,
         ]
+        return command
 
     def launch_headless(self, request: ProviderLaunchRequest) -> ProviderLaunchResult:
         command = self.headless_command(request.workspace_dir, request.prompt)
@@ -106,3 +125,17 @@ class CodexFlowProvider:
             stdout=result.stdout,
             stderr=result.stderr,
         )
+
+    def _effective_add_dirs(self) -> list[str]:
+        merged = [*self.agent_add_dirs, *self.codex.add_dirs]
+        return list(dict.fromkeys(merged))
+
+
+def _normalize_add_dir(workspace_dir: Path, raw: str) -> str:
+    expanded = os.path.expandvars(str(raw).strip())
+    if not expanded:
+        return ""
+    path = Path(expanded).expanduser()
+    if not path.is_absolute():
+        path = workspace_dir / path
+    return str(path.resolve())
