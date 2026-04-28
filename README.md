@@ -102,6 +102,14 @@ Terminal tabs:
 in `.pal/flows/*.yaml` inside the project root, so teams can iterate on phases, policies, agents,
 providers, artifacts, and transitions without changing `pal` code.
 
+Create a starter spec:
+
+```bash
+pal flow init --list-templates
+pal flow init dev-complex --template dev-complex --provider codex --repo api --repo web
+pal flow init dev-routine --template dev-routine --provider claude
+```
+
 Example `.pal/flows/dev-complex.yaml`:
 
 ```yaml
@@ -143,6 +151,7 @@ Validate specs and start a workflow-backed run:
 
 ```bash
 pal flow providers
+pal flow init dev-complex --template dev-complex --provider codex --repo api
 pal flow validate dev-complex
 pal flow start feat-auth --workflow dev-complex
 pal flow start feat-auth --workflow dev-complex --workspace reuse
@@ -336,6 +345,7 @@ pal rename <old_feature> <new_feature>
 pal run <feature> <agent> [agent args...]
 pal plan <feature> <agent> [agent args...]
 pal implement <feature> <agent> [agent args...]
+pal flow init [workflow] [--template dev-complex|dev-routine]
 pal flow providers
 pal flow validate [workflow]
 pal flow start <feature> [--workflow workflow] [--workspace state-only|create|reuse|validate]

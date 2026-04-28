@@ -24,6 +24,8 @@ This project aims to follow Keep a Changelog and Semantic Versioning.
   while optionally preparing or validating git-worktree feature workspaces.
 - Make Codex and Claude flow providers use local logged-in CLIs plus shared agent configuration for
   sandbox/permission modes, models, extra args, and writable roots.
+- Add `pal flow init` with built-in `dev-complex` and `dev-routine` workflow templates for checked-in
+  flow scaffolding.
 
 ## 0.2.0
 

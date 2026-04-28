@@ -12,6 +12,11 @@ from ..cli_config import cfg_from_options
 from .models import FlowPhase, FlowRun
 from .runtime import build_local_flow_service
 from .workflows.library import WorkflowSpecError
+from .workflows.templates import (
+    WorkflowTemplateError,
+    list_workflow_templates,
+    write_workflow_template,
+)
 
 
 flow_app = typer.Typer(help="Manage local agentic workflow runs.", no_args_is_help=True)
@@ -65,6 +70,105 @@ def _change_or_error(service, method: str, *args, **kwargs):  # noqa: ANN001, AN
         return getattr(service, method)(*args, **kwargs)
     except (FileNotFoundError, ValueError, WorkflowSpecError) as exc:
         raise typer.BadParameter(str(exc)) from exc
+
+
+def _write_workflow_template_or_error(
+    root: Path,
+    *,
+    workflow_name: str,
+    template: str,
+    provider: str,
+    work_type: str,
+    repos: list[str],
+    force: bool,
+) -> Path:
+    try:
+        return write_workflow_template(
+            root,
+            workflow_name=workflow_name,
+            template=template,
+            provider=provider,
+            work_type=work_type,
+            repos=repos,
+            force=force,
+        )
+    except WorkflowTemplateError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def _print_workflow_template_table() -> None:
+    table = Table(title="Flow workflow templates", header_style="bold")
+    table.add_column("Template")
+    table.add_column("Mode")
+    table.add_column("Description")
+    for template in list_workflow_templates():
+        table.add_row(template.name, template.mode, template.description)
+    console.print(table)
+
+
+@flow_app.command("init")
+def flow_init(
+    workflow: str = typer.Argument(
+        "dev-complex",
+        help="Workflow name to create under .pal/flows.",
+    ),
+    template: str = typer.Option(
+        "dev-complex",
+        "--template",
+        "-t",
+        help="Built-in workflow template.",
+    ),
+    provider: str = typer.Option(
+        "codex",
+        "--provider",
+        help="Default provider in the generated workflow spec.",
+    ),
+    work_type: str = typer.Option("dev", "--work-type", help="Workflow work_type value."),
+    repos: Optional[List[str]] = typer.Option(
+        None,
+        "--repo",
+        "-R",
+        help="Repo included in the generated workflow. Repeatable.",
+    ),
+    force: bool = typer.Option(False, "--force", help="Overwrite an existing workflow spec."),
+    list_templates: bool = typer.Option(
+        False,
+        "--list-templates",
+        help="List built-in workflow templates and exit.",
+    ),
+    root: Path = typer.Option(Path("."), "--root", "-r"),
+    worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
+    branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
+) -> None:
+    """Create a checked-in workflow spec from a built-in template."""
+    if list_templates:
+        _print_workflow_template_table()
+        return
+
+    service = _service_from_options(root, worktree_root, branch_prefix)
+    _provider_or_error(service, provider)
+    path = _write_workflow_template_or_error(
+        service.workflow_library.root,
+        workflow_name=workflow,
+        template=template,
+        provider=provider,
+        work_type=work_type,
+        repos=list(repos or []),
+        force=force,
+    )
+    result = service.validate_workflow(path)
+    if not result.valid:
+        raise typer.BadParameter("Generated workflow spec is invalid: " + "; ".join(result.errors))
+    console.print(
+        Panel.fit(
+            f"path: {path}\n"
+            f"template: {template}\n"
+            f"provider: {provider}\n"
+            f"work_type: {work_type}\n"
+            f"repos: {', '.join(repos or []) if repos else '(none)'}",
+            title="pal flow initialized",
+        )
+    )
 
 
 @flow_app.command("start")

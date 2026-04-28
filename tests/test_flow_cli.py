@@ -324,6 +324,143 @@ phases:
     assert "Unknown provider" in result.output
 
 
+def test_flow_init_lists_templates(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["flow", "init", "--root", str(tmp_path), "--list-templates"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "dev-complex" in result.output
+    assert "dev-routine" in result.output
+    assert "complex" in result.output
+
+
+def test_flow_init_creates_valid_workflow_spec(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "flow",
+            "init",
+            "team-flow",
+            "--root",
+            str(tmp_path),
+            "--provider",
+            "fake",
+            "--repo",
+            "api",
+            "--repo",
+            "web",
+        ],
+    )
+
+    validate = runner.invoke(app, ["flow", "validate", "team-flow", "--root", str(tmp_path)])
+    start = runner.invoke(
+        app,
+        ["flow", "start", "feat", "--root", str(tmp_path), "--workflow", "team-flow"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "pal flow initialized" in result.output
+    assert "api, web" in result.output
+    assert (tmp_path / ".pal" / "flows" / "team-flow.yaml").is_file()
+    assert validate.exit_code == 0, validate.output
+    assert start.exit_code == 0, start.output
+    assert "explore" in start.output
+
+
+def test_flow_init_rejects_existing_spec_unless_forced(tmp_path: Path) -> None:
+    first = runner.invoke(
+        app,
+        ["flow", "init", "routine", "--root", str(tmp_path), "--provider", "fake"],
+    )
+    blocked = runner.invoke(
+        app,
+        ["flow", "init", "routine", "--root", str(tmp_path), "--provider", "fake"],
+    )
+    forced = runner.invoke(
+        app,
+        [
+            "flow",
+            "init",
+            "routine",
+            "--root",
+            str(tmp_path),
+            "--provider",
+            "fake",
+            "--template",
+            "dev-routine",
+            "--force",
+        ],
+    )
+
+    assert first.exit_code == 0, first.output
+    assert blocked.exit_code != 0
+    assert "Workflow already exists" in _plain(blocked.output)
+    assert forced.exit_code == 0, forced.output
+    assert "dev-routine" in forced.output
+    assert "mode: routine" in (tmp_path / ".pal" / "flows" / "routine.yaml").read_text(
+        encoding="utf-8"
+    )
+
+
+def test_flow_init_reports_template_and_provider_errors(tmp_path: Path) -> None:
+    missing_template = runner.invoke(
+        app,
+        [
+            "flow",
+            "init",
+            "bad",
+            "--root",
+            str(tmp_path),
+            "--provider",
+            "fake",
+            "--template",
+            "missing",
+        ],
+    )
+    missing_provider = runner.invoke(
+        app,
+        ["flow", "init", "bad", "--root", str(tmp_path), "--provider", "missing"],
+    )
+
+    assert missing_template.exit_code != 0
+    assert "Unknown workflow template" in _plain(missing_template.output)
+    assert missing_provider.exit_code != 0
+    assert "Unknown provider" in _plain(missing_provider.output)
+
+
+def test_flow_init_reports_generated_validation_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class WorkflowLibrary:
+        root = tmp_path
+
+    class InvalidResult:
+        valid = False
+        errors = ["broken generated spec"]
+
+    class Service:
+        workflow_library = WorkflowLibrary()
+
+        def provider(self, _name: str) -> object:
+            return object()
+
+        def validate_workflow(self, _path: Path) -> InvalidResult:
+            return InvalidResult()
+
+    monkeypatch.setattr(flow_cli, "build_local_flow_service", lambda _cfg: Service())
+
+    result = runner.invoke(
+        app,
+        ["flow", "init", "bad", "--root", str(tmp_path), "--provider", "fake"],
+    )
+
+    assert result.exit_code != 0
+    assert "Generated workflow spec is invalid" in _plain(result.output)
+
+
 def test_flow_render_writes_phase_brief_artifacts(tmp_path: Path) -> None:
     _write_workflow(tmp_path, "dev-complex", _valid_workflow())
     start = runner.invoke(
