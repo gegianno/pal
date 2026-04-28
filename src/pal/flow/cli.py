@@ -8,9 +8,9 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from .cli_config import cfg_from_options
-from .flow_models import FlowPhase, FlowRun
-from .flow_runtime import build_local_flow_service
+from ..cli_config import cfg_from_options
+from .models import FlowPhase, FlowRun
+from .runtime import build_local_flow_service
 
 
 flow_app = typer.Typer(help="Manage local agentic workflow runs.", no_args_is_help=True)

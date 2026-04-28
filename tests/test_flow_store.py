@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from pal.flow_models import FlowEvent, FlowPhase, FlowPolicy, FlowRun, FlowStatus
-from pal.flow_store import LocalFlowStore
+from pal.flow.models import FlowEvent, FlowPhase, FlowPolicy, FlowRun, FlowStatus
+from pal.flow.store import LocalFlowStore
 
 
 def _run(feature: str = "feat", run_id: str = "run_1") -> FlowRun:

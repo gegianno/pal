@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .flow_events import FlowEventLog
-from .flow_models import FlowEvent, FlowRun
+from .events import FlowEventLog
+from .models import FlowEvent, FlowRun
 
 
 class LocalFlowStore:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol
 
-from .flow_models import FlowRun
+from ..models import FlowRun
 
 
 @dataclass(frozen=True)

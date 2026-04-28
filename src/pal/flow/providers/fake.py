@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from .flow_models import FlowRun
-from .flow_provider import ProviderResult
+from ..models import FlowRun
+from .base import ProviderResult
 
 
 class FakeFlowProvider:

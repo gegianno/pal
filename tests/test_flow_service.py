@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pal.flow_models import FlowPhase, FlowStatus
-from pal.flow_provider_fake import FakeFlowProvider
-from pal.flow_service import LocalFlowService, default_policies
-from pal.flow_store import LocalFlowStore
+from pal.flow.models import FlowPhase, FlowStatus
+from pal.flow.providers.fake import FakeFlowProvider
+from pal.flow.service import LocalFlowService, default_policies
+from pal.flow.store import LocalFlowStore
 
 
 def _ids() -> list[str]:

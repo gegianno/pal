@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from .flow_provider_fake import FakeFlowProvider
-from .flow_service import LocalFlowService
-from .flow_store import LocalFlowStore
+from .providers.fake import FakeFlowProvider
+from .service import LocalFlowService
+from .store import LocalFlowStore
 
 
 def build_local_flow_service(cfg) -> LocalFlowService:  # noqa: ANN001

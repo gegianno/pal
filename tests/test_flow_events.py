@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pal.flow_events import FlowEventLog
-from pal.flow_models import FlowEvent, FlowPhase
+from pal.flow.events import FlowEventLog
+from pal.flow.models import FlowEvent, FlowPhase
 
 
 def _event(event_id: str = "evt_1") -> FlowEvent:

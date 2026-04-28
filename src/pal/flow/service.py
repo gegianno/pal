@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Callable
 
-from .flow_models import FlowEvent, FlowPhase, FlowPolicy, FlowRun, FlowStatus, new_id, utc_now
-from .flow_provider import FlowProvider
-from .flow_store import LocalFlowStore
+from .models import FlowEvent, FlowPhase, FlowPolicy, FlowRun, FlowStatus, new_id, utc_now
+from .providers.base import FlowProvider
+from .store import LocalFlowStore
 
 
 def default_policies() -> dict[str, FlowPolicy]:

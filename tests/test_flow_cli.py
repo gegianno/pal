@@ -6,11 +6,11 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
-import pal.flow_cli as flow_cli
+import pal.flow.cli as flow_cli
 from pal.cli import app
-from pal.flow_events import FlowEventLog
-from pal.flow_models import FlowEvent, FlowPhase
-from pal.flow_store import LocalFlowStore
+from pal.flow.events import FlowEventLog
+from pal.flow.models import FlowEvent, FlowPhase
+from pal.flow.store import LocalFlowStore
 
 
 runner = CliRunner()

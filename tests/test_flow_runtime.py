@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from pal.flow_provider_fake import FakeFlowProvider
-from pal.flow_runtime import build_local_flow_service
-from pal.flow_store import LocalFlowStore
+from pal.flow.providers.fake import FakeFlowProvider
+from pal.flow.runtime import build_local_flow_service
+from pal.flow.store import LocalFlowStore
 
 
 def test_build_local_flow_service_wires_store_and_fake_provider(tmp_path: Path) -> None:

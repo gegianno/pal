@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pal.flow_models import (
+from pal.flow.models import (
     FlowEvent,
     FlowPhase,
     FlowPolicy,
