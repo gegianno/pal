@@ -56,6 +56,27 @@ def test_store_creates_run_layout_state_latest_and_events(tmp_path: Path) -> Non
     assert store.read_events("feat", "run_1") == [_event(run.run_id)]
 
 
+def test_store_writes_run_json_and_latest_provider_outputs(tmp_path: Path) -> None:
+    store = LocalFlowStore(tmp_path / "_wt")
+    run = _run()
+    store.create_run(run)
+
+    json_path = store.write_run_json(run, "provider-auth.json", {"fake": {"status": "ok"}})
+    output_paths = store.write_latest_output(
+        run,
+        provider="fake",
+        stdout='{"event":"ok"}\n',
+        stderr="warning\n",
+    )
+
+    assert json_path == store.run_dir("feat", "run_1") / "provider-auth.json"
+    assert store.read_run_json("feat", "run_1", "provider-auth.json") == {"fake": {"status": "ok"}}
+    assert Path(output_paths["stdout"]).read_text(encoding="utf-8") == '{"event":"ok"}\n'
+    assert Path(output_paths["stderr"]).read_text(encoding="utf-8") == "warning\n"
+    assert Path(output_paths["provider_log"]) == store.provider_log_path("feat", "run_1", "fake")
+    assert store.latest_output_dir("feat", "run_1") == store.run_dir("feat", "run_1") / "latest"
+
+
 def test_store_save_state_updates_existing_run(tmp_path: Path) -> None:
     store = LocalFlowStore(tmp_path / "_wt")
     run = _run()

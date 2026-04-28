@@ -74,6 +74,58 @@ def test_flow_start_rejects_unknown_phase(tmp_path: Path) -> None:
     assert "Unknown phase" in result.output
 
 
+def test_flow_start_rejects_unknown_provider(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["flow", "start", "feat", "--root", str(tmp_path), "--provider", "missing"],
+    )
+
+    assert result.exit_code != 0
+    assert "Unknown provider" in result.output
+
+
+def test_flow_start_requires_prompt_for_headless_runs(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        ["flow", "start", "feat", "--root", str(tmp_path), "--provider", "fake", "--headless"],
+    )
+
+    assert result.exit_code != 0
+    assert "--prompt is required" in result.output
+
+
+def test_flow_start_headless_fake_records_completion(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "flow",
+            "start",
+            "feat",
+            "--root",
+            str(tmp_path),
+            "--provider",
+            "fake",
+            "--headless",
+            "--prompt",
+            "hello",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    watch = runner.invoke(app, ["flow", "watch", "feat", "--root", str(tmp_path)])
+    assert watch.exit_code == 0, watch.output
+    assert "provider.completed" in watch.output
+
+
+def test_flow_providers_preflights_all_registered_providers(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["flow", "providers", "--root", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert "fake" in result.output
+    assert "codex" in result.output
+    assert "claude" in result.output
+
+
 def test_flow_status_reports_missing_run_as_bad_parameter(tmp_path: Path) -> None:
     result = runner.invoke(app, ["flow", "status", "missing", "--root", str(tmp_path)])
 

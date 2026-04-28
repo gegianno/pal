@@ -32,6 +32,12 @@ class LocalFlowStore:
     def events_path(self, feature: str, run_id: str) -> Path:
         return self.run_dir(feature, run_id) / "events.jsonl"
 
+    def latest_output_dir(self, feature: str, run_id: str) -> Path:
+        return self.run_dir(feature, run_id) / "latest"
+
+    def provider_log_path(self, feature: str, run_id: str, provider: str) -> Path:
+        return self.run_dir(feature, run_id) / "providers" / f"{provider}.jsonl"
+
     def create_run(self, run: FlowRun) -> None:
         run_dir = self.run_dir(run.feature, run.run_id)
         run_dir.mkdir(parents=True, exist_ok=False)
@@ -46,6 +52,37 @@ class LocalFlowStore:
         path.write_text(
             json.dumps(run.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
+
+    def write_run_json(self, run: FlowRun, filename: str, data: object) -> Path:
+        path = self.run_dir(run.feature, run.run_id) / filename
+        path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        return path
+
+    def read_run_json(self, feature: str, run_id: str, filename: str) -> object:
+        path = self.run_dir(feature, run_id) / filename
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def write_latest_output(
+        self,
+        run: FlowRun,
+        *,
+        provider: str,
+        stdout: str,
+        stderr: str,
+    ) -> dict[str, str]:
+        output_dir = self.latest_output_dir(run.feature, run.run_id)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        stdout_path = output_dir / "stdout.log"
+        stderr_path = output_dir / "stderr.log"
+        provider_path = self.provider_log_path(run.feature, run.run_id, provider)
+        stdout_path.write_text(stdout, encoding="utf-8")
+        stderr_path.write_text(stderr, encoding="utf-8")
+        provider_path.write_text(stdout, encoding="utf-8")
+        return {
+            "stdout": str(stdout_path),
+            "stderr": str(stderr_path),
+            "provider_log": str(provider_path),
+        }
 
     def load_state(self, feature: str, run_id: str) -> FlowRun:
         data = json.loads(self.state_path(feature, run_id).read_text(encoding="utf-8"))

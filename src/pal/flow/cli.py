@@ -45,6 +45,13 @@ def _service_from_options(root: Path, worktree_root: Optional[Path], branch_pref
     return build_local_flow_service(cfg)
 
 
+def _provider_or_error(service, provider: str):  # noqa: ANN001
+    try:
+        return service.provider(provider)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
 @flow_app.command("start")
 def flow_start(
     feature: str = typer.Argument(..., help="Feature workspace name."),
@@ -56,17 +63,26 @@ def flow_start(
     ),
     mode: str = typer.Option("routine", "--mode", help="Run mode: routine or complex."),
     phase: str = typer.Option("explore", "--phase", help="Initial phase."),
+    provider: str = typer.Option("fake", "--provider", help="Provider: fake, codex, or claude."),
+    headless: bool = typer.Option(False, "--headless", help="Run provider in local headless mode."),
+    prompt: str = typer.Option("", "--prompt", help="Prompt for explicit headless provider runs."),
     root: Path = typer.Option(Path("."), "--root", "-r"),
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
     branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
 ) -> None:
     """Start a local flow run with durable state and events."""
     service = _service_from_options(root, worktree_root, branch_prefix)
+    _provider_or_error(service, provider)
+    if headless and not prompt.strip():
+        raise typer.BadParameter("--prompt is required when --headless is set.")
     run = service.start(
         feature=feature,
         repos=list(repos or []),
         mode=mode,
         phase=_parse_phase(phase),
+        provider_name=provider,
+        headless=headless,
+        prompt=prompt,
     )
     console.print(
         Panel.fit(
@@ -99,6 +115,31 @@ def flow_status(
     table.add_row("status", run.status.value)
     table.add_row("repos", ", ".join(run.repos) if run.repos else "(none)")
     table.add_row("artifact_root", run.artifact_root)
+    console.print(table)
+
+
+@flow_app.command("providers")
+def flow_providers(
+    root: Path = typer.Option(Path("."), "--root", "-r"),
+    worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
+    branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
+) -> None:
+    """Show provider install/auth/capability preflight without launching model work."""
+    service = _service_from_options(root, worktree_root, branch_prefix)
+    table = Table(title="Flow providers", header_style="bold")
+    table.add_column("Provider")
+    table.add_column("Installed")
+    table.add_column("Auth")
+    table.add_column("Version")
+    table.add_column("Modes")
+    for preflight in service.preflight_all():
+        table.add_row(
+            preflight.provider,
+            "yes" if preflight.installed else "no",
+            preflight.auth.status,
+            preflight.version or "(unknown)",
+            ", ".join(preflight.capabilities.execution_modes),
+        )
     console.print(table)
 
 
