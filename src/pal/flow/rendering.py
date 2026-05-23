@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
+from .artifacts import resolve_artifact_path
 from .models import FlowEvent, FlowPhase, FlowPolicy, FlowRun
-from .workflows.models import WorkflowAgent, WorkflowPhase, WorkflowSpec
+from .workflows.models import WorkflowAgent, WorkflowPhase, WorkflowSpec, WorkflowTools
 
 
 @dataclass(frozen=True)
@@ -15,6 +17,7 @@ class ResolvedPhaseAgent:
     prompt: str
     produces: list[str] = field(default_factory=list)
     requires: list[str] = field(default_factory=list)
+    tools: WorkflowTools = field(default_factory=WorkflowTools)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -24,6 +27,7 @@ class ResolvedPhaseAgent:
             "prompt": self.prompt,
             "produces": list(self.produces),
             "requires": list(self.requires),
+            "tools": self.tools.to_dict(),
         }
 
 
@@ -66,6 +70,7 @@ class PhaseBrief:
                 "artifact_root": self.run.artifact_root,
                 "workflow_name": self.run.workflow_name,
                 "work_type": self.run.work_type,
+                "request": self.run.request,
             },
             "phase": {
                 "id": self.phase.value,
@@ -76,6 +81,7 @@ class PhaseBrief:
             "agents": [agent.to_dict() for agent in self.agents],
             "provider_guidance": dict(self.provider_guidance),
             "approvals": dict(self.run.approvals),
+            "approval_reasons": dict(self.run.approval_reasons),
             "blocked": {
                 "reason": self.run.blocked_reason,
                 "at": self.run.blocked_at,
@@ -102,27 +108,55 @@ class PhaseBrief:
             f"- Repos: `{', '.join(self.run.repos) if self.run.repos else 'none'}`",
             f"- Artifact root: `{self.run.artifact_root}`",
             "",
+            "## Artifact Path Rules",
+            "",
+            "- Artifact names are logical paths resolved under the artifact root.",
+            "- Do not create a nested `artifacts/` directory inside the artifact root.",
+            (
+                f"- Example: `artifacts/example.md` must be written to "
+                f"`{self.run.artifact_root}/example.md`."
+            ),
+            "",
+            "## User Request",
+            "",
+            self.run.request or "No user request recorded.",
+            "",
             "## Phase Objective",
             "",
             _phase_objective(self.phase, self.policy),
             "",
             "## Agents",
             "",
-            *_agent_lines(self.agents),
+            *_agent_lines(self.run, self.agents),
             "",
             "## Required Artifacts",
             "",
-            *_list_lines(self.required_artifacts, empty="No required artifacts configured."),
+            *artifact_lines(
+                self.run,
+                self.required_artifacts,
+                empty="No required artifacts configured.",
+            ),
             "",
             "## Provider Guidance",
             "",
             *_provider_lines(self.provider_guidance),
             "",
+            "## Tool Delegation",
+            "",
+            "- Pal does not manage external connector auth for this phase.",
+            "- Use your provider-native tools, MCPs, browser tools, and CLIs for GitHub, Linear, Slack, and similar systems when the phase or request requires them.",
+            "- Treat agent `tools.required` and `tools.optional` entries as delegated tool expectations, not pal-executed actions.",
+            "- Record every external side effect, URL, identifier, and unavailable required tool in the required artifacts.",
+            "- If a required external tool is unavailable, mark the phase blocked instead of pretending the action happened.",
+            "",
             "## Run State",
             "",
             f"- Approvals: `{', '.join(sorted(self.run.approvals)) if self.run.approvals else 'none'}`",
+            f"- Approval reasons: `{_approval_reasons_text(self.run.approval_reasons)}`",
             f"- Blocked reason: `{self.run.blocked_reason or 'none'}`",
             f"- Phase history entries: `{len(self.run.phase_history)}`",
+            "",
+            *_verification_contract_lines(self.phase),
             "",
             "## Recent Events",
             "",
@@ -219,6 +253,7 @@ def _resolve_agent(
         prompt=agent.prompt,
         produces=list(agent.produces),
         requires=list(agent.requires),
+        tools=agent.tools,
     )
 
 
@@ -260,7 +295,36 @@ def _phase_objective(phase: FlowPhase, policy: FlowPolicy) -> str:
     )
 
 
-def _agent_lines(agents: list[ResolvedPhaseAgent]) -> list[str]:
+def artifact_lines(run: FlowRun, artifacts: list[str], *, empty: str) -> list[str]:
+    if not artifacts:
+        return [empty]
+    return [
+        f"- `{artifact}` -> `{resolve_artifact_path(run, Path(run.artifact_root), artifact)}`"
+        for artifact in artifacts
+    ]
+
+
+def _verification_contract_lines(phase: FlowPhase) -> list[str]:
+    if phase != FlowPhase.VERIFY:
+        return []
+    return [
+        "## Verification Outcome Contract",
+        "",
+        "Verification artifacts must include a JSON block with `status` set to one of:",
+        "",
+        "- `passed`: all required checks passed.",
+        "- `blocked`: verification could not fully complete; supervisor approval with a reason is required to advance.",
+        "- `failed`: verification completed and found a failing check.",
+    ]
+
+
+def _approval_reasons_text(reasons: dict[str, str]) -> str:
+    if not reasons:
+        return "none"
+    return "; ".join(f"{phase}: {reason}" for phase, reason in sorted(reasons.items()))
+
+
+def _agent_lines(run: FlowRun, agents: list[ResolvedPhaseAgent]) -> list[str]:
     if not agents:
         return ["No agents configured for this phase."]
     lines: list[str] = []
@@ -270,13 +334,14 @@ def _agent_lines(agents: list[ResolvedPhaseAgent]) -> list[str]:
             lines.append(f"  Prompt: {agent.prompt}")
         if agent.produces:
             lines.append(f"  Produces: {', '.join(agent.produces)}")
+            lines.extend(f"    {line}" for line in artifact_lines(run, agent.produces, empty=""))
         if agent.requires:
             lines.append(f"  Requires: {', '.join(agent.requires)}")
+        if agent.tools.required:
+            lines.append(f"  Required tools: {', '.join(agent.tools.required)}")
+        if agent.tools.optional:
+            lines.append(f"  Optional tools: {', '.join(agent.tools.optional)}")
     return lines
-
-
-def _list_lines(items: list[str], *, empty: str) -> list[str]:
-    return [f"- `{item}`" for item in items] if items else [empty]
 
 
 def _provider_lines(guidance: dict[str, str]) -> list[str]:

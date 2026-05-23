@@ -18,8 +18,14 @@ class LocalCommandRunner:
         *,
         cwd: Optional[Path] = None,
         timeout: Optional[int] = None,
+        input_text: Optional[str] = None,
     ) -> CommandResult:
         try:
+            stdin_kwargs: dict[str, object]
+            if input_text is None:
+                stdin_kwargs = {"stdin": subprocess.DEVNULL}
+            else:
+                stdin_kwargs = {"input": input_text}
             completed = subprocess.run(
                 command,
                 check=False,
@@ -27,6 +33,7 @@ class LocalCommandRunner:
                 text=True,
                 capture_output=True,
                 timeout=timeout,
+                **stdin_kwargs,
             )
             return CommandResult(
                 returncode=completed.returncode,

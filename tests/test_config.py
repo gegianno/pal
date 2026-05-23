@@ -41,6 +41,9 @@ def test_config_init_writes_valid_toml(tmp_path: Path) -> None:
     assert parsed["branch_prefix"] == "feat"
     assert parsed["codex"]["sandbox"] == "workspace-write"
     assert parsed["codex"]["approval"] == "on-request"
+    assert parsed["codex"]["headless_approval"] == "never"
+    assert parsed["codex"]["headless_ephemeral"] is True
+    assert parsed["codex"]["headless_ignore_user_config"] is False
     assert parsed["codex"]["full_auto"] is False
     assert parsed["claude"]["permission_mode"] == "acceptEdits"
     assert parsed["claude"]["allow_bypass_permissions"] is False
@@ -73,10 +76,20 @@ def test_load_config_parses_local_files(tmp_path: Path) -> None:
 
 def test_load_config_parses_codex_add_dirs(tmp_path: Path) -> None:
     (tmp_path / ".pal.toml").write_text(
-        'root = "."\n\n[codex]\nadd_dirs = ["/tmp/a", "/tmp/b"]\n',
+        (
+            'root = "."\n\n'
+            "[codex]\n"
+            'headless_approval = "on-failure"\n'
+            "headless_ephemeral = false\n"
+            "headless_ignore_user_config = true\n"
+            'add_dirs = ["/tmp/a", "/tmp/b"]\n'
+        ),
         encoding="utf-8",
     )
     cfg = load_config(root=tmp_path, cli_overrides={"root": str(tmp_path)})
+    assert cfg.codex.headless_approval == "on-failure"
+    assert cfg.codex.headless_ephemeral is False
+    assert cfg.codex.headless_ignore_user_config is True
     assert cfg.codex.add_dirs == ["/tmp/a", "/tmp/b"]
 
 

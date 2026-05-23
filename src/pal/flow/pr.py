@@ -9,12 +9,12 @@ from ..identifiers import IdentifierError, normalize_repo_name, safe_child_path
 from .providers.command import LocalCommandRunner
 
 
-class FlowShipError(ValueError):
+class FlowPrError(ValueError):
     pass
 
 
 @dataclass(frozen=True)
-class FlowShipRepo:
+class FlowPrRepo:
     repo: str
     path: str
     branch: str
@@ -54,7 +54,7 @@ class FlowShipRepo:
 
 
 @dataclass(frozen=True)
-class FlowShipSummary:
+class FlowPrSummary:
     feature: str
     run_id: str
     base: str
@@ -64,14 +64,14 @@ class FlowShipSummary:
     push_requested: bool
     pr_requested: bool
     draft: bool
-    repos: list[FlowShipRepo]
+    repos: list[FlowPrRepo]
     paths: dict[str, str] = field(default_factory=dict)
 
     @property
     def status(self) -> str:
         return "failed" if any(repo.failed for repo in self.repos) else "completed"
 
-    def with_paths(self, paths: dict[str, str]) -> FlowShipSummary:
+    def with_paths(self, paths: dict[str, str]) -> FlowPrSummary:
         return replace(self, paths={**self.paths, **paths})
 
     def to_dict(self) -> dict[str, Any]:
@@ -91,11 +91,11 @@ class FlowShipSummary:
         }
 
 
-class FlowShipper:
+class FlowPrManager:
     def __init__(self, runner: LocalCommandRunner | None = None) -> None:
         self.runner = runner or LocalCommandRunner()
 
-    def ship(
+    def prepare(
         self,
         *,
         feature: str,
@@ -111,10 +111,10 @@ class FlowShipper:
         push: bool,
         create_pr: bool,
         draft: bool,
-    ) -> FlowShipSummary:
+    ) -> FlowPrSummary:
         feature_dir = feature_dir.resolve()
         repo_paths = self._repo_paths(feature_dir, repos)
-        return FlowShipSummary(
+        return FlowPrSummary(
             feature=feature,
             run_id=run_id,
             base=base,
@@ -125,7 +125,7 @@ class FlowShipper:
             pr_requested=create_pr,
             draft=draft,
             repos=[
-                self._ship_repo(
+                self._prepare_repo(
                     repo=repo,
                     repo_path=repo_path,
                     base=base,
@@ -151,18 +151,18 @@ class FlowShipper:
                 if child.is_dir() and is_git_repo(child)
             )
         if not repo_names:
-            raise FlowShipError(f"No git repos found in feature workspace: {feature_dir}")
+            raise FlowPrError(f"No git repos found in feature workspace: {feature_dir}")
         repo_paths: list[tuple[str, Path]] = []
         for repo in repo_names:
             repo_path = _repo_path(feature_dir, repo)
             if not repo_path.exists():
-                raise FlowShipError(f"Repo worktree '{repo}' not found at {repo_path}.")
+                raise FlowPrError(f"Repo worktree '{repo}' not found at {repo_path}.")
             if not is_git_repo(repo_path):
-                raise FlowShipError(f"Repo worktree '{repo}' is not a git repo: {repo_path}")
+                raise FlowPrError(f"Repo worktree '{repo}' is not a git repo: {repo_path}")
             repo_paths.append((repo, repo_path))
         return repo_paths
 
-    def _ship_repo(
+    def _prepare_repo(
         self,
         *,
         repo: str,
@@ -176,13 +176,13 @@ class FlowShipper:
         push: bool,
         create_pr: bool,
         draft: bool,
-    ) -> FlowShipRepo:
+    ) -> FlowPrRepo:
         branch = self._git(repo_path, ["rev-parse", "--abbrev-ref", "HEAD"])
         head_sha = self._git(repo_path, ["rev-parse", "HEAD"])
         status_short = self._git(repo_path, ["status", "-sb"])
         porcelain = self._git(repo_path, ["status", "--porcelain"])
         diff_stat = self._git(repo_path, ["diff", "--stat", "HEAD"], allow_failure=True)
-        repo_result = FlowShipRepo(
+        repo_result = FlowPrRepo(
             repo=repo,
             path=str(repo_path),
             branch=branch,
@@ -207,12 +207,12 @@ class FlowShipper:
 
     def _maybe_commit(
         self,
-        repo: FlowShipRepo,
+        repo: FlowPrRepo,
         repo_path: Path,
         dry_run: bool,
         commit: bool,
         commit_message: str,
-    ) -> FlowShipRepo:
+    ) -> FlowPrRepo:
         if not commit:
             return repo
         if not repo.changed:
@@ -245,11 +245,11 @@ class FlowShipper:
 
     def _maybe_push(
         self,
-        repo: FlowShipRepo,
+        repo: FlowPrRepo,
         repo_path: Path,
         dry_run: bool,
         push: bool,
-    ) -> FlowShipRepo:
+    ) -> FlowPrRepo:
         if not push or repo.failed:
             return repo
         if dry_run:
@@ -265,14 +265,14 @@ class FlowShipper:
 
     def _maybe_create_pr(
         self,
-        repo: FlowShipRepo,
+        repo: FlowPrRepo,
         repo_path: Path,
         dry_run: bool,
         create_pr: bool,
         draft: bool,
         title: str,
         body_file: Path,
-    ) -> FlowShipRepo:
+    ) -> FlowPrRepo:
         if not create_pr or repo.failed:
             return repo
         if dry_run:
@@ -313,7 +313,7 @@ class FlowShipper:
             return result.stdout.strip()
         if allow_failure:
             return ""
-        raise FlowShipError(_command_error("git " + " ".join(args), result.stderr))
+        raise FlowPrError(_command_error("git " + " ".join(args), result.stderr))
 
     def _run(self, command: list[str], *, cwd: Path):
         return self.runner.run(command, cwd=cwd)
@@ -329,4 +329,4 @@ def _repo_path(feature_dir: Path, repo: str) -> Path:
         name = normalize_repo_name(repo)
         return safe_child_path(feature_dir, name, "Repo worktree")
     except IdentifierError as exc:
-        raise FlowShipError(f"Repo worktree must stay inside feature workspace: {repo}") from exc
+        raise FlowPrError(f"Repo worktree must stay inside feature workspace: {repo}") from exc

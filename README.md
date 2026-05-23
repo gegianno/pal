@@ -155,7 +155,7 @@ pal flow providers
 pal flow init dev-complex --template dev-complex --provider codex --repo api
 pal flow validate dev-complex
 pal flow inspect dev-complex
-pal flow start feat-auth --workflow dev-complex
+pal flow start feat-auth --workflow dev-complex --request "Implement auth session cleanup"
 pal flow start feat-auth --workflow dev-complex --workspace reuse
 pal flow render feat-auth
 pal flow execute feat-auth
@@ -165,14 +165,16 @@ pal flow approve feat-auth
 pal flow advance feat-auth
 pal flow block feat-auth --reason "implementation hit a dependency issue"
 pal flow replan feat-auth
-pal flow ship feat-auth --dry-run
+pal flow pr feat-auth --dry-run
 pal flow status feat-auth
 pal flow watch feat-auth --follow
 ```
 
-Provider execution is still explicit and safe by default: `pal flow start` records durable run state
-and provider preflight metadata, but only runs a local headless agent when `--headless --prompt ...`
-is passed.
+Provider execution is still explicit and safe by default: `pal flow start` records durable run state,
+the user request from `--request` or `--request-file`, and provider preflight metadata, but only
+runs a local headless agent when `--headless --prompt ...` is passed. Workflow phase briefs include
+the recorded request so later `render`, `execute`, and `run` commands carry the original task
+context.
 
 Workspace preparation is explicit in V1. By default, `pal flow start` uses `--workspace state-only`
 and only records flow state. Use `--workspace reuse` to create any missing repo worktrees while
@@ -214,25 +216,64 @@ durable, but V1 execution does not auto-advance the workflow; `approve`, `advanc
 
 Flow provider execution uses the local Codex and Claude Code CLIs, so it can use your already
 logged-in accounts instead of API keys. Codex flow execution applies `[codex].sandbox`,
-`[codex].full_auto`, `[agent].add_dirs`, and `[codex].add_dirs` to `codex exec`. Claude flow
-execution applies `[claude].permission_mode`, `[claude].model`, `[claude].extra_args`,
-`[agent].add_dirs`, and `[claude].add_dirs` to `claude -p`. The Claude bypass-permission guardrail
-also applies to flow execution. Execution manifests include the redacted command shape, working
-directory, provider status, return code, stdout/stderr paths, and provider diagnostics such as
-resolved executable, output directory, and prompt size. Full prompts are stored separately in
-`prompt.md`.
+`[codex].headless_approval`, `[codex].headless_ephemeral`, `[codex].full_auto`,
+`[agent].add_dirs`, and `[codex].add_dirs` to `codex exec`. `headless_approval` defaults to
+`never` because noninteractive runs cannot safely surface native approval prompts; interactive
+`pal run ... codex` still uses `[codex].approval`. `headless_ephemeral` defaults to `true` because
+pal persists its own execution history and headless agent sessions should not depend on writing
+Codex session files.
+Set `[codex].headless_ignore_user_config = true` when a headless flow should avoid user-configured
+Codex MCPs/plugins while still using the existing Codex auth session. Claude flow execution applies
+`[claude].permission_mode`, `[claude].model`,
+`[claude].extra_args`, `[agent].add_dirs`, and `[claude].add_dirs` to `claude -p`. The Claude
+bypass-permission guardrail also applies to flow execution. Headless prompts are sent to providers
+over stdin, and pal closes
+stdin for noninteractive commands by default; this keeps large or sensitive prompts out of process
+arguments and avoids CLIs waiting for inherited stdin. Execution manifests include the redacted
+command shape, working directory, provider status, return code, stdout/stderr paths, and provider
+diagnostics such as resolved executable, output directory, prompt transport, and prompt size. Full
+prompts are stored separately in `prompt.md`.
+
+When `pal flow execute` is launched from inside another sandboxed coding agent, the outer sandbox
+must allow the provider CLI to access its logged-in state directory, such as `CODEX_HOME` for Codex.
+Using an isolated empty `CODEX_HOME` avoids home-directory writes but also loses logged-in account
+auth, so pal does not copy provider credentials into workspaces.
+If the provider reports a blocked state directory, `pal flow execute` exits non-zero and records a
+`provider_state_inaccessible` diagnostic with guidance in the execution stderr log.
 
 `pal flow artifacts <feature>` validates the current phase's `required_artifacts`. Artifact paths
 must be relative, must not contain `..`, and always resolve under `.pal/artifacts`; an
-`artifacts/...` prefix is accepted and normalized there too. `pal flow advance` refuses to complete a
-phase with missing required artifacts unless
+`artifacts/...` prefix is accepted and normalized there too. Phase briefs and execution prompts
+render concrete write paths, so `artifacts/pr.md` means `.pal/artifacts/pr.md`, not
+`.pal/artifacts/artifacts/pr.md`. `pal flow advance` refuses to complete a phase with missing
+required artifacts unless
 `--force-artifacts` is passed.
 
-`pal flow ship <feature>` prepares review/PR handoff artifacts under `.pal/runs/<run-id>/ship/`.
-By default it is a safe dry run that records repo status, branch, diff stats, and the action plan.
-When explicitly requested, it can commit (`--commit --message ...`), push (`--push`), and create or
-reuse GitHub PRs through the local `gh` CLI (`--create-pr --no-dry-run`). Failures are recorded in
-the durable ship manifest instead of being hidden in terminal output.
+Verification artifacts must declare a standard JSON `status`: `passed`, `blocked`, or `failed`.
+`passed` can advance normally. `blocked` means verification could not fully complete and requires
+`pal flow approve --phase verify --reason "..."` before advance; the approval reason is stored in
+run state and events. `failed` means verification found a real failing check and cannot be approved
+forward; replan or block the phase instead.
+
+Built-in development workflows use `implement -> verify -> pr -> review` for routine work and
+`explore -> design -> implement -> verify -> pr -> review` for complex work. The `pr` phase is
+responsible for opening or updating the draft PR after verification; if review sends work back to
+implementation, the flow returns through verify and updates the same PR again.
+
+Tool access is delegated to the coding agent harness for V1. Pal does not reimplement GitHub,
+Linear, Slack, browser, or other connector auth. Phase prompts tell agents to use their native
+tools, MCPs, browser tools, and CLIs when available, and required artifacts must record every
+external side effect, URL, identifier, and blocker. Agent `tools.required` entries such as
+`github_write` and `tools.optional` entries such as `linear_write` are explicit delegated tool
+expectations, not pal-executed actions. Keep `requires` for execution capabilities such as
+`local_headless` and `json_output`.
+
+`pal flow pr <feature>` is the lower-level deterministic PR helper that agents may use from the
+`pr` phase. By default it is a safe dry run that records repo status, branch, diff stats, and the
+action plan under `.pal/runs/<run-id>/pr/`. When explicitly requested, it can commit
+(`--commit --message ...`), push (`--push`), and create or reuse GitHub PRs through the local `gh`
+CLI (`--create-pr --no-dry-run`). Failures are recorded in the durable PR manifest instead of being
+hidden in terminal output.
 
 `pal flow run <feature>` is the policy-aware phase loop:
 
@@ -312,6 +353,9 @@ editor = "cursor"
 [codex]
 sandbox = "workspace-write"   # read-only | workspace-write | danger-full-access
 approval = "on-request"       # untrusted | on-failure | on-request | never
+headless_approval = "never"   # default for noninteractive `pal flow execute`
+headless_ephemeral = true     # pal stores flow execution history; avoid Codex session writes
+headless_ignore_user_config = false
 full_auto = false             # if true, passes --full-auto
 
 [claude]
@@ -383,7 +427,7 @@ pal flow init [workflow] [--template dev-complex|dev-routine]
 pal flow providers
 pal flow validate [workflow]
 pal flow inspect <workflow>
-pal flow start <feature> [--workflow workflow] [--workspace state-only|create|reuse|validate]
+pal flow start <feature> [--workflow workflow] [--request text|--request-file path] [--workspace state-only|create|reuse|validate]
 pal flow render <feature>
 pal flow execute <feature>
 pal flow artifacts <feature>
@@ -392,7 +436,7 @@ pal flow approve <feature>
 pal flow advance <feature> [--force-artifacts]
 pal flow block <feature> --reason <reason>
 pal flow replan <feature>
-pal flow ship <feature> [--commit --message msg] [--push] [--create-pr]
+pal flow pr <feature> [--commit --message msg] [--push] [--create-pr]
 pal flow status <feature>
 pal flow watch <feature> [--follow]
 pal rm <feature> [--repo repo...]

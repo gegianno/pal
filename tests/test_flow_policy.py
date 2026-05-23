@@ -19,7 +19,7 @@ def test_phase_policy_uses_run_policy_and_autonomous_fallback() -> None:
         created_at="now",
         updated_at="now",
     )
-    fallback = FlowRun.from_dict({**run.to_dict(), "current_phase": "ship", "policies": {}})
+    fallback = FlowRun.from_dict({**run.to_dict(), "current_phase": "pr", "policies": {}})
 
     assert phase_policy(run) == FlowPolicy.OBSERVER
     assert phase_policy(fallback) == FlowPolicy.AUTONOMOUS

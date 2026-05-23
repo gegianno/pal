@@ -8,6 +8,27 @@ from ..models import FlowPhase, FlowPolicy
 
 
 @dataclass(frozen=True)
+class WorkflowTools:
+    required: list[str] = field(default_factory=list)
+    optional: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, list[str]]:
+        return {
+            "required": list(self.required),
+            "optional": list(self.optional),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> WorkflowTools:
+        if not isinstance(data, dict):
+            return cls()
+        return cls(
+            required=[str(item) for item in data.get("required", [])],
+            optional=[str(item) for item in data.get("optional", [])],
+        )
+
+
+@dataclass(frozen=True)
 class WorkflowAgent:
     id: str
     role: str
@@ -15,6 +36,7 @@ class WorkflowAgent:
     prompt: str
     produces: list[str] = field(default_factory=list)
     requires: list[str] = field(default_factory=list)
+    tools: WorkflowTools = field(default_factory=WorkflowTools)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -24,6 +46,7 @@ class WorkflowAgent:
             "prompt": self.prompt,
             "produces": list(self.produces),
             "requires": list(self.requires),
+            "tools": self.tools.to_dict(),
         }
 
     @classmethod
@@ -35,6 +58,7 @@ class WorkflowAgent:
             prompt=str(data.get("prompt", "")),
             produces=[str(item) for item in data.get("produces", [])],
             requires=[str(item) for item in data.get("requires", [])],
+            tools=WorkflowTools.from_dict(data.get("tools", {})),
         )
 
 

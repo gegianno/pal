@@ -12,8 +12,8 @@ class FlowPhase(str, Enum):
     DESIGN = "design"
     IMPLEMENT = "implement"
     VERIFY = "verify"
+    PR = "pr"
     REVIEW = "review"
-    SHIP = "ship"
 
 
 class FlowPolicy(str, Enum):
@@ -56,8 +56,10 @@ class FlowRun:
     work_type: str = ""
     phase_history: list[dict[str, Any]] = field(default_factory=list)
     approvals: dict[str, str] = field(default_factory=dict)
+    approval_reasons: dict[str, str] = field(default_factory=dict)
     blocked_reason: str = ""
     blocked_at: str = ""
+    request: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -76,8 +78,10 @@ class FlowRun:
             "work_type": self.work_type,
             "phase_history": [dict(item) for item in self.phase_history],
             "approvals": dict(self.approvals),
+            "approval_reasons": dict(self.approval_reasons),
             "blocked_reason": self.blocked_reason,
             "blocked_at": self.blocked_at,
+            "request": self.request,
         }
 
     @classmethod
@@ -105,8 +109,13 @@ class FlowRun:
             approvals={
                 str(phase): str(timestamp) for phase, timestamp in data.get("approvals", {}).items()
             },
+            approval_reasons={
+                str(phase): str(reason)
+                for phase, reason in data.get("approval_reasons", {}).items()
+            },
             blocked_reason=str(data.get("blocked_reason", "")),
             blocked_at=str(data.get("blocked_at", "")),
+            request=str(data.get("request", "")),
         )
 
 

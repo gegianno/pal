@@ -12,6 +12,8 @@ from .base import (
     ProviderLaunchResult,
     ProviderPreflight,
     ProviderResult,
+    PROVIDER_STATE_ERROR,
+    provider_state_access_error,
 )
 from .command import LocalCommandRunner
 
@@ -63,14 +65,31 @@ class CodexFlowProvider:
             version = (version_result.stdout or version_result.stderr).strip()
             login_result = self.runner.run([executable, "login", "status"], timeout=10)
             login_text = (login_result.stdout or login_result.stderr).strip()
+            state_error = provider_state_access_error(self.name, login_text)
             auth = ProviderAuthProfile(
                 provider=self.name,
                 auth_mode="existing_session",
-                status="available" if login_result.returncode == 0 else "unknown",
-                detail=login_text.splitlines()[0] if login_text else "no login status output",
+                status=(
+                    "available"
+                    if login_result.returncode == 0
+                    else "unavailable"
+                    if state_error
+                    else "unknown"
+                ),
+                detail=(
+                    state_error.splitlines()[0]
+                    if state_error
+                    else login_text.splitlines()[0]
+                    if login_text
+                    else "no login status output"
+                ),
             )
             if login_result.returncode != 0:
-                notes.append("codex login status returned a non-zero exit code")
+                notes.append(
+                    "codex provider state is inaccessible"
+                    if state_error
+                    else "codex login status returned a non-zero exit code"
+                )
 
         return ProviderPreflight(
             provider=self.name,
@@ -89,14 +108,17 @@ class CodexFlowProvider:
             payload={"feature": run.feature, "mode": run.mode, "repos": list(run.repos)},
         )
 
-    def headless_command(self, workspace_dir: Path, prompt: str) -> list[str]:
+    def headless_command(self, workspace_dir: Path, _prompt: str) -> list[str]:
         executable = self.runner.which("codex") or "codex"
-        command = [
-            executable,
-            "exec",
-            "--cd",
-            str(workspace_dir),
-        ]
+        command = [executable]
+        headless_approval = self.codex.headless_approval.strip()
+        if headless_approval and not self.codex.full_auto:
+            command += ["--ask-for-approval", headless_approval]
+        command += ["exec", "--cd", str(workspace_dir)]
+        if self.codex.headless_ephemeral:
+            command.append("--ephemeral")
+        if self.codex.headless_ignore_user_config:
+            command.append("--ignore-user-config")
         if self.codex.full_auto:
             command.append("--full-auto")
         else:
@@ -108,7 +130,7 @@ class CodexFlowProvider:
         command += [
             "--skip-git-repo-check",
             "--json",
-            prompt,
+            "-",
         ]
         return command
 
@@ -124,9 +146,17 @@ class CodexFlowProvider:
                 returncode=127,
                 stdout="",
                 stderr="codex CLI not found on PATH. Install Codex or log in before execution.",
-                diagnostics=_launch_diagnostics(command, request, error="missing_executable"),
+                diagnostics=_launch_diagnostics(
+                    command,
+                    request,
+                    headless_ephemeral=self.codex.headless_ephemeral,
+                    error="missing_executable",
+                ),
             )
-        result = self.runner.run(command, cwd=request.workspace_dir)
+        result = self.runner.run(command, cwd=request.workspace_dir, input_text=request.prompt)
+        state_error = provider_state_access_error(self.name, result.stderr)
+        stderr = state_error or result.stderr
+        error = PROVIDER_STATE_ERROR if state_error else ""
         return ProviderLaunchResult(
             provider=self.name,
             execution_mode="local_headless",
@@ -135,8 +165,13 @@ class CodexFlowProvider:
             status="completed" if result.returncode == 0 else "failed",
             returncode=result.returncode,
             stdout=result.stdout,
-            stderr=result.stderr,
-            diagnostics=_launch_diagnostics(command, request),
+            stderr=stderr,
+            diagnostics=_launch_diagnostics(
+                command,
+                request,
+                headless_ephemeral=self.codex.headless_ephemeral,
+                error=error,
+            ),
         )
 
     def _effective_add_dirs(self) -> list[str]:
@@ -158,6 +193,7 @@ def _launch_diagnostics(
     command: list[str],
     request: ProviderLaunchRequest,
     *,
+    headless_ephemeral: bool,
     error: str = "",
 ) -> dict[str, object]:
     return {
@@ -165,5 +201,7 @@ def _launch_diagnostics(
         "workspace_dir": str(request.workspace_dir),
         "output_dir": str(request.output_dir),
         "prompt_chars": len(request.prompt),
+        "prompt_transport": "stdin",
+        "headless_ephemeral": headless_ephemeral,
         "error": error,
     }

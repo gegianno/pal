@@ -6,7 +6,7 @@ import subprocess
 import pytest
 
 from pal.flow.providers.base import CommandResult
-from pal.flow.ship import FlowShipError, FlowShipper, FlowShipSummary
+from pal.flow.pr import FlowPrError, FlowPrManager, FlowPrSummary
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -30,7 +30,7 @@ def _init_repo(path: Path) -> Path:
     return path
 
 
-class FakeShipRunner:
+class FakePrRunner:
     def __init__(
         self,
         *,
@@ -94,42 +94,42 @@ class FakeShipRunner:
         raise AssertionError(f"unexpected command: {command}")
 
 
-def _ship(
+def _pr(
     feature_dir: Path,
     *,
-    runner: FakeShipRunner | None = None,
+    runner: FakePrRunner | None = None,
     repos: list[str] | None = None,
     dry_run: bool = True,
     commit: bool = False,
     push: bool = False,
     create_pr: bool = False,
     draft: bool = False,
-) -> FlowShipSummary:
+) -> FlowPrSummary:
     body_file = feature_dir / "body.md"
     body_file.write_text("body\n", encoding="utf-8")
-    return FlowShipper(runner).ship(
+    return FlowPrManager(runner).prepare(
         feature="feat",
         run_id="run_1",
         feature_dir=feature_dir,
         repos=list(repos or []),
         base="main",
-        title="Ship feat",
+        title="Open PR",
         body_file=body_file,
         dry_run=dry_run,
         commit=commit,
-        commit_message="Ship feat",
+        commit_message="Open PR",
         push=push,
         create_pr=create_pr,
         draft=draft,
     )
 
 
-def test_flow_shipper_discovers_repos_and_dry_runs_requested_actions(tmp_path: Path) -> None:
+def test_flow_pr_manager_discovers_repos_and_dry_runs_requested_actions(tmp_path: Path) -> None:
     feature_dir = tmp_path / "_wt" / "feat"
     repo = _init_repo(feature_dir / "api")
     (repo / "README.md").write_text("changed\n", encoding="utf-8")
 
-    summary = _ship(feature_dir, commit=True, push=True, create_pr=True)
+    summary = _pr(feature_dir, commit=True, push=True, create_pr=True)
 
     assert summary.status == "completed"
     assert summary.to_dict()["status"] == "completed"
@@ -140,32 +140,32 @@ def test_flow_shipper_discovers_repos_and_dry_runs_requested_actions(tmp_path: P
     assert summary.repos[0].pr_status == "would_create"
 
 
-def test_flow_shipper_marks_clean_repo_without_committing(tmp_path: Path) -> None:
+def test_flow_pr_manager_marks_clean_repo_without_committing(tmp_path: Path) -> None:
     feature_dir = tmp_path / "_wt" / "feat"
     _init_repo(feature_dir / "api")
 
-    summary = _ship(feature_dir, repos=["api"], dry_run=False, commit=True)
+    summary = _pr(feature_dir, repos=["api"], dry_run=False, commit=True)
 
     assert summary.repos[0].changed is False
     assert summary.repos[0].commit_status == "clean"
 
 
-def test_flow_shipper_rejects_missing_or_invalid_repos(tmp_path: Path) -> None:
+def test_flow_pr_manager_rejects_missing_or_invalid_repos(tmp_path: Path) -> None:
     feature_dir = tmp_path / "_wt" / "feat"
     feature_dir.mkdir(parents=True)
 
-    with pytest.raises(FlowShipError, match="No git repos"):
-        _ship(feature_dir)
-    with pytest.raises(FlowShipError, match="not found"):
-        _ship(feature_dir, repos=["api"])
+    with pytest.raises(FlowPrError, match="No git repos"):
+        _pr(feature_dir)
+    with pytest.raises(FlowPrError, match="not found"):
+        _pr(feature_dir, repos=["api"])
 
     (feature_dir / "api").mkdir()
-    with pytest.raises(FlowShipError, match="not a git repo"):
-        _ship(feature_dir, repos=["api"])
+    with pytest.raises(FlowPrError, match="not a git repo"):
+        _pr(feature_dir, repos=["api"])
 
 
 @pytest.mark.parametrize("repo", ["../outside", "/tmp/outside", ".", " "])
-def test_flow_shipper_rejects_repo_paths_outside_feature_workspace(
+def test_flow_pr_manager_rejects_repo_paths_outside_feature_workspace(
     tmp_path: Path,
     repo: str,
 ) -> None:
@@ -174,26 +174,26 @@ def test_flow_shipper_rejects_repo_paths_outside_feature_workspace(
     feature_dir.mkdir(parents=True)
 
     assert outside.is_dir()
-    with pytest.raises(FlowShipError, match="inside feature workspace|must not be empty"):
-        _ship(feature_dir, repos=[repo])
+    with pytest.raises(FlowPrError, match="inside feature workspace|must not be empty"):
+        _pr(feature_dir, repos=[repo])
 
 
-def test_flow_shipper_rejects_symlinked_repo_escape(tmp_path: Path) -> None:
+def test_flow_pr_manager_rejects_symlinked_repo_escape(tmp_path: Path) -> None:
     feature_dir = tmp_path / "_wt" / "feat"
     outside = _init_repo(tmp_path / "_wt" / "outside")
     feature_dir.mkdir(parents=True)
     (feature_dir / "linked").symlink_to(outside, target_is_directory=True)
 
-    with pytest.raises(FlowShipError, match="inside feature workspace"):
-        _ship(feature_dir, repos=["linked"])
+    with pytest.raises(FlowPrError, match="inside feature workspace"):
+        _pr(feature_dir, repos=["linked"])
 
 
-def test_flow_shipper_commits_pushes_and_reuses_existing_pr(tmp_path: Path) -> None:
+def test_flow_pr_manager_commits_pushes_and_reuses_existing_pr(tmp_path: Path) -> None:
     feature_dir = tmp_path / "_wt" / "feat"
     _init_repo(feature_dir / "api")
-    runner = FakeShipRunner(existing_pr="https://example.test/pr/old")
+    runner = FakePrRunner(existing_pr="https://example.test/pr/old")
 
-    summary = _ship(
+    summary = _pr(
         feature_dir,
         runner=runner,
         repos=["api", "api"],
@@ -211,12 +211,12 @@ def test_flow_shipper_commits_pushes_and_reuses_existing_pr(tmp_path: Path) -> N
     assert not any(call[0][:3] == ["gh", "pr", "create"] for call in runner.calls)
 
 
-def test_flow_shipper_creates_draft_pr(tmp_path: Path) -> None:
+def test_flow_pr_manager_creates_draft_pr(tmp_path: Path) -> None:
     feature_dir = tmp_path / "_wt" / "feat"
     _init_repo(feature_dir / "api")
-    runner = FakeShipRunner(changed=False)
+    runner = FakePrRunner(changed=False)
 
-    summary = _ship(
+    summary = _pr(
         feature_dir,
         runner=runner,
         repos=["api"],
@@ -234,15 +234,15 @@ def test_flow_shipper_creates_draft_pr(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("runner", "kwargs", "status", "error"),
     [
-        (FakeShipRunner(add_rc=1), {"commit": True}, "commit_status", "git add failed"),
-        (FakeShipRunner(commit_rc=1), {"commit": True}, "commit_status", "git commit failed"),
-        (FakeShipRunner(push_rc=1), {"push": True}, "push_status", "git push failed"),
-        (FakeShipRunner(create_rc=1), {"create_pr": True}, "pr_status", "gh pr create failed"),
+        (FakePrRunner(add_rc=1), {"commit": True}, "commit_status", "git add failed"),
+        (FakePrRunner(commit_rc=1), {"commit": True}, "commit_status", "git commit failed"),
+        (FakePrRunner(push_rc=1), {"push": True}, "push_status", "git push failed"),
+        (FakePrRunner(create_rc=1), {"create_pr": True}, "pr_status", "gh pr create failed"),
     ],
 )
-def test_flow_shipper_records_action_failures(
+def test_flow_pr_manager_records_action_failures(
     tmp_path: Path,
-    runner: FakeShipRunner,
+    runner: FakePrRunner,
     kwargs: dict[str, bool],
     status: str,
     error: str,
@@ -250,7 +250,7 @@ def test_flow_shipper_records_action_failures(
     feature_dir = tmp_path / "_wt" / "feat"
     _init_repo(feature_dir / "api")
 
-    summary = _ship(feature_dir, runner=runner, repos=["api"], dry_run=False, **kwargs)
+    summary = _pr(feature_dir, runner=runner, repos=["api"], dry_run=False, **kwargs)
 
     assert summary.status == "failed"
     assert getattr(summary.repos[0], status) == "failed"
@@ -258,30 +258,30 @@ def test_flow_shipper_records_action_failures(
     assert summary.repos[0].failed is True
 
 
-def test_flow_shipper_handles_diff_stat_failure_and_raises_for_required_git_failure(
+def test_flow_pr_manager_handles_diff_stat_failure_and_raises_for_required_git_failure(
     tmp_path: Path,
 ) -> None:
     feature_dir = tmp_path / "_wt" / "feat"
     _init_repo(feature_dir / "api")
 
-    diff_summary = _ship(
+    diff_summary = _pr(
         feature_dir,
-        runner=FakeShipRunner(diff_rc=1),
+        runner=FakePrRunner(diff_rc=1),
         repos=["api"],
         dry_run=False,
     )
 
     assert diff_summary.repos[0].diff_stat == ""
-    with pytest.raises(FlowShipError, match="git rev-parse"):
-        _ship(feature_dir, runner=FakeShipRunner(branch_rc=1), repos=["api"])
+    with pytest.raises(FlowPrError, match="git rev-parse"):
+        _pr(feature_dir, runner=FakePrRunner(branch_rc=1), repos=["api"])
 
 
-def test_flow_ship_summary_merges_paths() -> None:
-    summary = FlowShipSummary(
+def test_flow_pr_summary_merges_paths() -> None:
+    summary = FlowPrSummary(
         feature="feat",
         run_id="run_1",
         base="main",
-        title="Ship feat",
+        title="Open PR",
         dry_run=True,
         commit_requested=False,
         push_requested=False,

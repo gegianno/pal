@@ -23,6 +23,25 @@ def test_local_command_runner_reports_missing_executable() -> None:
     assert "Executable not found" in result.stderr
 
 
+def test_local_command_runner_closes_stdin_by_default() -> None:
+    result = LocalCommandRunner().run(
+        ["/bin/sh", "-c", "if read line; then printf open; else printf closed; fi"],
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "closed"
+
+
+def test_local_command_runner_passes_input_text() -> None:
+    result = LocalCommandRunner().run(
+        ["/bin/sh", "-c", "cat"],
+        input_text="prompt over stdin",
+    )
+
+    assert result.returncode == 0
+    assert result.stdout == "prompt over stdin"
+
+
 def test_local_command_runner_reports_timeout() -> None:
     result = LocalCommandRunner().run(
         [sys.executable, "-c", "import time; time.sleep(1)"],

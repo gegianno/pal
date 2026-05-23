@@ -13,8 +13,12 @@ from ..workspaces import (
 from .artifacts import (
     ArtifactPathError,
     ArtifactValidation,
+    VerificationOutcome,
+    VerificationStatus,
     validate_artifact_reference,
     validate_required_artifacts,
+    is_verification_artifact,
+    read_verification_outcome,
 )
 from .execution import (
     PhaseExecutionRecord,
@@ -30,7 +34,7 @@ from .models import FlowEvent, FlowPhase, FlowPolicy, FlowRun, FlowStatus, new_i
 from .policy import auto_advance_allowed, ensure_execution_allowed, phase_policy
 from .providers.base import FlowProvider, ProviderLaunchRequest, ProviderPreflight
 from .rendering import PhaseBrief, build_phase_brief
-from .ship import FlowShipSummary, FlowShipper
+from .pr import FlowPrManager, FlowPrSummary
 from .store import LocalFlowStore
 from .workflows.library import LocalWorkflowLibrary, WorkflowSpecError
 from .workflows.models import WorkflowSpec, WorkflowValidationResult
@@ -40,9 +44,19 @@ _DEFAULT_PHASE_ORDER = [
     FlowPhase.DESIGN,
     FlowPhase.IMPLEMENT,
     FlowPhase.VERIFY,
+    FlowPhase.PR,
     FlowPhase.REVIEW,
-    FlowPhase.SHIP,
 ]
+
+_DELEGATED_TOOLS = {
+    "browser",
+    "github_read",
+    "github_write",
+    "linear_read",
+    "linear_write",
+    "slack_read",
+    "slack_write",
+}
 
 
 def default_policies() -> dict[str, FlowPolicy]:
@@ -51,8 +65,8 @@ def default_policies() -> dict[str, FlowPolicy]:
         FlowPhase.DESIGN.value: FlowPolicy.AUTONOMOUS,
         FlowPhase.IMPLEMENT.value: FlowPolicy.AUTONOMOUS,
         FlowPhase.VERIFY.value: FlowPolicy.SUPERVISOR,
-        FlowPhase.REVIEW.value: FlowPolicy.OBSERVER,
-        FlowPhase.SHIP.value: FlowPolicy.SUPERVISOR,
+        FlowPhase.PR.value: FlowPolicy.SUPERVISOR,
+        FlowPhase.REVIEW.value: FlowPolicy.SUPERVISOR,
     }
 
 
@@ -66,7 +80,7 @@ class LocalFlowService:
         workflow_library: LocalWorkflowLibrary | None = None,
         workspace_backend: WorkspaceBackend | None = None,
         hooks: FlowHookDispatcher | None = None,
-        shipper: FlowShipper | None = None,
+        pr_manager: FlowPrManager | None = None,
         clock: Callable[[], str] = utc_now,
         id_factory: Callable[[str], str] = new_id,
     ) -> None:
@@ -76,7 +90,7 @@ class LocalFlowService:
         self.workflow_library = workflow_library
         self.workspace_backend = workspace_backend
         self.hooks = hooks or FlowHookDispatcher()
-        self.shipper = shipper or FlowShipper()
+        self.pr_manager = pr_manager or FlowPrManager()
         self.clock = clock
         self.id_factory = id_factory
 
@@ -137,6 +151,7 @@ class LocalFlowService:
         provider_name: str | None = None,
         headless: bool = False,
         prompt: str = "",
+        request: str = "",
         workflow: str | None = None,
         workspace_mode: str = STATE_ONLY_WORKSPACE_MODE,
         copy_local: bool | None = None,
@@ -166,6 +181,7 @@ class LocalFlowService:
             if repos
             else self._normalize_repos(workflow_spec.repos if workflow_spec else [])
         )
+        normalized_request = request.strip()
         policies = workflow_spec.policies_by_phase() if workflow_spec else default_policies()
         workspace_result = None
         if normalized_workspace_mode != STATE_ONLY_WORKSPACE_MODE:
@@ -192,6 +208,7 @@ class LocalFlowService:
             updated_at=now,
             workflow_name=workflow_spec.name if workflow_spec else "",
             work_type=workflow_spec.work_type if workflow_spec else "",
+            request=normalized_request,
             phase_history=[
                 {
                     "phase": selected_phase.value,
@@ -205,6 +222,8 @@ class LocalFlowService:
         self.store.create_run(run)
         if workflow_spec:
             self.store.write_run_json(run, "workflow.json", workflow_spec.to_run_dict())
+        if normalized_request:
+            self.store.write_run_json(run, "request.json", {"request": normalized_request})
         if workspace_result:
             self.store.write_run_json(run, "workspace.json", workspace_result.to_dict())
         preflight = provider.preflight()
@@ -228,6 +247,8 @@ class LocalFlowService:
         if workflow_spec:
             payload["workflow"] = workflow_spec.name
             payload["work_type"] = workflow_spec.work_type
+        if normalized_request:
+            payload["request_chars"] = len(normalized_request)
         self._append_event(run, event_type="flow.run.started", actor="pal", payload=payload)
         if workspace_result:
             self._append_event(
@@ -300,7 +321,7 @@ class LocalFlowService:
     def hook_results(self, feature: str, run_id: str | None = None) -> list[object]:
         return self.store.read_hook_results(feature, run_id)
 
-    def ship(
+    def pr(
         self,
         feature: str,
         *,
@@ -315,14 +336,14 @@ class LocalFlowService:
         push: bool = False,
         create_pr: bool = False,
         draft: bool = False,
-    ) -> FlowShipSummary:
+    ) -> FlowPrSummary:
         run = self.status(feature, run_id)
         if commit and not commit_message.strip():
             raise ValueError("--message is required when --commit is set.")
         normalized_title = title.strip() or f"{run.feature}: {run.workflow_name or run.mode}"
-        normalized_body = body.strip() or self._default_ship_body(run)
-        body_path = self.store.write_ship_body(run, normalized_body + "\n")
-        summary = self.shipper.ship(
+        normalized_body = body.strip() or self._default_pr_body(run)
+        body_path = self.store.write_pr_body(run, normalized_body + "\n")
+        summary = self.pr_manager.prepare(
             feature=run.feature,
             run_id=run.run_id,
             feature_dir=self.store.feature_dir(run.feature),
@@ -337,12 +358,12 @@ class LocalFlowService:
             create_pr=create_pr,
             draft=draft,
         )
-        manifest_path = self.store.ship_dir(run.feature, run.run_id) / "manifest.json"
+        manifest_path = self.store.pr_dir(run.feature, run.run_id) / "manifest.json"
         summary = summary.with_paths({"body": body_path, "manifest": str(manifest_path)})
-        self.store.write_ship_manifest(run, summary.to_dict())
+        self.store.write_pr_manifest(run, summary.to_dict())
         self._append_event(
             run,
-            event_type=f"flow.ship.{summary.status}",
+            event_type=f"flow.pr.{summary.status}",
             actor="pal",
             payload=summary.to_dict(),
         )
@@ -639,6 +660,7 @@ class LocalFlowService:
         *,
         run_id: str | None = None,
         phase: FlowPhase | None = None,
+        reason: str = "",
         actor: str = "human",
     ) -> FlowRun:
         run = self.status(feature, run_id)
@@ -651,12 +673,37 @@ class LocalFlowService:
                 f"Can only approve current phase '{run.current_phase.value}', "
                 f"not '{target_phase.value}'."
             )
-        if not self._phase_requires_approval(workflow, target_phase):
+        reason = reason.strip()
+        verification_outcome = self._verification_outcome_for_phase(
+            run,
+            workflow,
+            target_phase,
+        )
+        if verification_outcome and verification_outcome.status == VerificationStatus.FAILED:
+            raise ValueError(
+                f"Phase '{target_phase.value}' has verification status "
+                f"'{verification_outcome.status.value}' and cannot be approved."
+            )
+        phase_requires_approval = self._phase_requires_approval(workflow, target_phase)
+        blocked_requires_approval = (
+            verification_outcome is not None
+            and verification_outcome.status == VerificationStatus.BLOCKED
+        )
+        if not phase_requires_approval and not blocked_requires_approval:
             raise ValueError(f"Phase '{target_phase.value}' does not require approval.")
+        if blocked_requires_approval and not reason:
+            raise ValueError(
+                f"Phase '{target_phase.value}' has verification status "
+                "'blocked' and requires an approval reason."
+            )
         now = self.clock()
+        approval_reasons = dict(run.approval_reasons)
+        if reason:
+            approval_reasons[target_phase.value] = reason
         updated = replace(
             run,
             approvals={**run.approvals, target_phase.value: now},
+            approval_reasons=approval_reasons,
             updated_at=now,
         )
         self.store.save_state(updated)
@@ -664,7 +711,14 @@ class LocalFlowService:
             updated,
             event_type="flow.phase.approved",
             actor=actor,
-            payload={"phase": target_phase.value, "approved_at": now},
+            payload={
+                "phase": target_phase.value,
+                "approved_at": now,
+                "reason": reason,
+                "verification_status": verification_outcome.status.value
+                if verification_outcome
+                else "",
+            },
         )
         return updated
 
@@ -683,6 +737,7 @@ class LocalFlowService:
         signal = signal.strip() or "complete"
         if signal == "complete" and self._approval_required_but_missing(run, workflow):
             raise ValueError(f"Phase '{run.current_phase.value}' requires approval before advance.")
+        validation: ArtifactValidation | None = None
         if signal == "complete" and not force_artifacts:
             validation = self._artifact_validation(run, workflow)
             if not validation.valid:
@@ -690,6 +745,10 @@ class LocalFlowService:
                 raise ValueError(
                     f"Phase '{run.current_phase.value}' is missing required artifacts: {missing}."
                 )
+        if signal == "complete":
+            validation = validation or self._artifact_validation(run, workflow)
+            if validation.valid:
+                self._ensure_verification_allows_advance(run, workflow)
 
         target = self._transition_target(run, workflow, signal)
         now = self.clock()
@@ -729,6 +788,7 @@ class LocalFlowService:
             current_phase=target,
             status=FlowStatus.RUNNING,
             approvals=self._clear_phase_approval(run.approvals, target),
+            approval_reasons=self._clear_phase_approval(run.approval_reasons, target),
             updated_at=now,
             blocked_reason="",
             blocked_at="",
@@ -818,6 +878,7 @@ class LocalFlowService:
             current_phase=target,
             status=FlowStatus.RUNNING,
             approvals=self._clear_phase_approval(run.approvals, target),
+            approval_reasons=self._clear_phase_approval(run.approval_reasons, target),
             blocked_reason="",
             blocked_at="",
             updated_at=now,
@@ -847,6 +908,65 @@ class LocalFlowService:
             required_artifacts=self._phase_required_artifacts(run, workflow),
         )
 
+    def _ensure_verification_allows_advance(
+        self,
+        run: FlowRun,
+        workflow: WorkflowSpec | None,
+    ) -> None:
+        if run.current_phase != FlowPhase.VERIFY:
+            return
+        verification_artifact = self._phase_verification_artifact(run, workflow)
+        if not verification_artifact:
+            return
+        outcome = read_verification_outcome(
+            run,
+            workspace_dir=self.store.feature_dir(run.feature),
+            artifact=verification_artifact,
+        )
+        if outcome.status == VerificationStatus.PASSED:
+            return
+        if outcome.status == VerificationStatus.BLOCKED:
+            approved = run.current_phase.value in run.approvals
+            reason = run.approval_reasons.get(run.current_phase.value, "").strip()
+            if approved and reason:
+                return
+            raise ValueError(
+                "Verification completed with status 'blocked'. "
+                "Approve the verify phase with a reason before advancing."
+            )
+        raise ValueError(
+            f"Verification status '{outcome.status.value}' cannot advance. "
+            "Replan, block the phase, or fix the verification failure."
+        )
+
+    def _verification_outcome_for_phase(
+        self,
+        run: FlowRun,
+        workflow: WorkflowSpec | None,
+        phase: FlowPhase,
+    ) -> VerificationOutcome | None:
+        if phase != FlowPhase.VERIFY or phase != run.current_phase:
+            return None
+        verification_artifact = self._phase_verification_artifact(run, workflow)
+        if not verification_artifact:
+            return None
+        return read_verification_outcome(
+            run,
+            workspace_dir=self.store.feature_dir(run.feature),
+            artifact=verification_artifact,
+        )
+
+    def _phase_verification_artifact(
+        self,
+        run: FlowRun,
+        workflow: WorkflowSpec | None,
+    ) -> str:
+        artifacts = self._phase_required_artifacts(run, workflow)
+        for artifact in artifacts:
+            if is_verification_artifact(artifact):
+                return artifact
+        return ""
+
     def _phase_required_artifacts(
         self,
         run: FlowRun,
@@ -869,7 +989,7 @@ class LocalFlowService:
         )
         return summary
 
-    def _default_ship_body(self, run: FlowRun) -> str:
+    def _default_pr_body(self, run: FlowRun) -> str:
         lines = [
             f"# {run.feature}",
             "",
@@ -941,6 +1061,9 @@ class LocalFlowService:
                         )
                         continue
                     errors.append(f"Agent '{agent.id}' has unknown requirement '{requirement}'.")
+                for tool in [*agent.tools.required, *agent.tools.optional]:
+                    if tool not in _DELEGATED_TOOLS:
+                        errors.append(f"Agent '{agent.id}' has unknown delegated tool '{tool}'.")
         return errors
 
     def _workflow_artifact_errors(self, spec: WorkflowSpec) -> list[str]:

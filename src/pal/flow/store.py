@@ -70,8 +70,8 @@ class LocalFlowStore:
         execution_name = normalize_identifier(execution_id, "Execution ID", max_length=120)
         return self.phase_dir(feature, run_id, phase) / "executions" / execution_name
 
-    def ship_dir(self, feature: str, run_id: str) -> Path:
-        return self.run_dir(feature, run_id) / "ship"
+    def pr_dir(self, feature: str, run_id: str) -> Path:
+        return self.run_dir(feature, run_id) / "pr"
 
     def create_run(self, run: FlowRun) -> None:
         run_dir = self.run_dir(run.feature, run.run_id)
@@ -172,17 +172,17 @@ class LocalFlowStore:
         )
         return paths
 
-    def write_ship_body(self, run: FlowRun, body: str) -> str:
-        ship_dir = self.ship_dir(run.feature, run.run_id)
-        ship_dir.mkdir(parents=True, exist_ok=True)
-        path = ship_dir / "body.md"
+    def write_pr_body(self, run: FlowRun, body: str) -> str:
+        pr_dir = self.pr_dir(run.feature, run.run_id)
+        pr_dir.mkdir(parents=True, exist_ok=True)
+        path = pr_dir / "body.md"
         path.write_text(body, encoding="utf-8")
         return str(path)
 
-    def write_ship_manifest(self, run: FlowRun, manifest: dict[str, object]) -> str:
-        ship_dir = self.ship_dir(run.feature, run.run_id)
-        ship_dir.mkdir(parents=True, exist_ok=True)
-        path = ship_dir / "manifest.json"
+    def write_pr_manifest(self, run: FlowRun, manifest: dict[str, object]) -> str:
+        pr_dir = self.pr_dir(run.feature, run.run_id)
+        pr_dir.mkdir(parents=True, exist_ok=True)
+        path = pr_dir / "manifest.json"
         path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         return str(path)
 

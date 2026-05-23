@@ -21,6 +21,9 @@ def test_apply_dict_accepts_legacy_and_mixed_value_shapes(tmp_path: Path) -> Non
             "codex": {
                 "sandbox": "read-only",
                 "approval": "never",
+                "headless_approval": "on-failure",
+                "headless_ephemeral": False,
+                "headless_ignore_user_config": True,
                 "full_auto": True,
                 "add_dir": ["c", 3],
             },
@@ -46,6 +49,9 @@ def test_apply_dict_accepts_legacy_and_mixed_value_shapes(tmp_path: Path) -> Non
     assert cfg.repos == ["a", "2"]
     assert cfg.editor == "code"
     assert cfg.agent.add_dirs == ["a", "2"]
+    assert cfg.codex.headless_approval == "on-failure"
+    assert cfg.codex.headless_ephemeral is False
+    assert cfg.codex.headless_ignore_user_config is True
     assert cfg.codex.add_dirs == ["c", "3"]
     assert cfg.claude.add_dirs == ["d", "4"]
     assert cfg.local_files.repos["repo1"].paths == [".env"]

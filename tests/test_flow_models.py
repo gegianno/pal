@@ -28,8 +28,10 @@ def test_flow_run_round_trips_with_policy_and_pr_fields() -> None:
         work_type="dev",
         phase_history=[{"phase": "explore", "entered_at": "now"}],
         approvals={"explore": "approved"},
+        approval_reasons={"explore": "Accepted blocked verification."},
         blocked_reason="waiting for API",
         blocked_at="later",
+        request="Fix the multi-select styling.",
     )
 
     parsed = FlowRun.from_dict(run.to_dict())
@@ -58,7 +60,9 @@ def test_flow_run_from_dict_accepts_missing_optional_fields() -> None:
     assert parsed.workflow_name == ""
     assert parsed.work_type == ""
     assert parsed.phase_history == []
+    assert parsed.request == ""
     assert parsed.approvals == {}
+    assert parsed.approval_reasons == {}
     assert parsed.blocked_reason == ""
     assert parsed.blocked_at == ""
 
@@ -78,12 +82,14 @@ def test_flow_run_from_dict_filters_non_mapping_phase_history() -> None:
             "updated_at": "now",
             "phase_history": [{"phase": "implement"}, "bad"],
             "approvals": {"design": 1},
+            "approval_reasons": {"design": 2},
         }
     )
 
     assert parsed.status == FlowStatus.BLOCKED
     assert parsed.phase_history == [{"phase": "implement"}]
     assert parsed.approvals == {"design": "1"}
+    assert parsed.approval_reasons == {"design": "2"}
 
 
 def test_flow_event_round_trips_with_and_without_phase() -> None:

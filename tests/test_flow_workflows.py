@@ -7,7 +7,7 @@ import pytest
 
 from pal.flow.models import FlowPhase, FlowPolicy
 from pal.flow.workflows.library import LocalWorkflowLibrary, WorkflowSpecError
-from pal.flow.workflows.models import WorkflowDefaults, WorkflowValidationResult
+from pal.flow.workflows.models import WorkflowAgent, WorkflowDefaults, WorkflowValidationResult
 
 
 def _write_workflow(root: Path, name: str, body: str) -> Path:
@@ -87,9 +87,9 @@ def test_workflow_library_loads_spec_defaults_and_transitions(tmp_path: Path) ->
     assert spec.from_run_dict(spec.to_run_dict()) == spec
 
     with pytest.raises(ValueError, match="has no phase"):
-        spec.phase(FlowPhase.SHIP)
+        spec.phase(FlowPhase.PR)
     with pytest.raises(ValueError, match="has no phase"):
-        spec.phase_after(FlowPhase.SHIP)
+        spec.phase_after(FlowPhase.PR)
 
 
 def test_workflow_library_loads_yml_files_and_service_default_policy(tmp_path: Path) -> None:
@@ -148,6 +148,31 @@ phases:
     assert spec.defaults.provider == ""
     assert spec.phases[0].provider == ""
     assert spec.phases[0].agents[0].prompt == ""
+    assert spec.phases[0].agents[0].tools.required == []
+    assert spec.phases[0].agents[0].tools.optional == []
+
+
+def test_workflow_library_converts_null_tools_to_empty_expectations(tmp_path: Path) -> None:
+    _write_workflow(
+        tmp_path,
+        "null-tools",
+        """
+version: 1
+name: null-tools
+work_type: dev
+phases:
+  - id: pr
+    agents:
+      - id: pr-manager
+        role: PR manager
+        tools:
+""",
+    )
+
+    spec = LocalWorkflowLibrary(tmp_path).load("null-tools")
+
+    assert spec.phases[0].agents[0].tools.required == []
+    assert spec.phases[0].agents[0].tools.optional == []
 
 
 def test_workflow_library_accepts_absolute_paths_and_empty_directory(tmp_path: Path) -> None:
@@ -257,6 +282,17 @@ def test_workflow_library_accepts_absolute_paths_and_empty_directory(tmp_path: P
             "agents:\n      - id: a\n        role: r\n        requires: nope\n",
             "requires must be a list",
         ),
+        (
+            "version: 1\nname: bad\nwork_type: dev\nphases:\n  - id: explore\n    "
+            "agents:\n      - id: a\n        role: r\n        tools: nope\n",
+            "tools must be a mapping",
+        ),
+        (
+            "version: 1\nname: bad\nwork_type: dev\nphases:\n  - id: explore\n    "
+            "agents:\n      - id: a\n        role: r\n        tools:\n"
+            "          required: nope\n",
+            "tools.required must be a list",
+        ),
     ],
 )
 def test_workflow_library_reports_invalid_specs(
@@ -268,6 +304,37 @@ def test_workflow_library_reports_invalid_specs(
 
     with pytest.raises(WorkflowSpecError, match=re.escape(message)):
         LocalWorkflowLibrary(tmp_path).load("bad")
+
+
+def test_workflow_agent_round_trips_tool_expectations() -> None:
+    agent = WorkflowAgent.from_dict(
+        {
+            "id": "pr-manager",
+            "role": "PR manager",
+            "provider": "codex",
+            "prompt": "Open the draft PR.",
+            "produces": ["artifacts/pr.md"],
+            "requires": ["local_headless"],
+            "tools": {
+                "required": ["github_write"],
+                "optional": ["linear_write"],
+            },
+        }
+    )
+
+    assert agent.tools.required == ["github_write"]
+    assert agent.tools.optional == ["linear_write"]
+    assert agent.to_dict()["tools"] == {
+        "required": ["github_write"],
+        "optional": ["linear_write"],
+    }
+    assert WorkflowAgent.from_dict(
+        {
+            "id": "legacy",
+            "role": "legacy agent",
+            "tools": [],
+        }
+    ).tools.to_dict() == {"required": [], "optional": []}
 
 
 def test_workflow_library_reports_missing_and_invalid_yaml(tmp_path: Path) -> None:

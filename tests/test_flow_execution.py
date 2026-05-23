@@ -13,7 +13,7 @@ from pal.flow.execution import (
 )
 from pal.flow.models import FlowPhase, FlowPolicy, FlowRun, FlowStatus
 from pal.flow.rendering import PhaseBrief, ResolvedPhaseAgent
-from pal.flow.workflows.models import WorkflowAgent, WorkflowPhase, WorkflowSpec
+from pal.flow.workflows.models import WorkflowAgent, WorkflowPhase, WorkflowSpec, WorkflowTools
 
 
 def _run() -> FlowRun:
@@ -62,7 +62,11 @@ def _workflow(*, agents: list[WorkflowAgent]) -> WorkflowSpec:
     )
 
 
-def _agent(agent_id: str = "designer") -> ResolvedPhaseAgent:
+def _agent(
+    agent_id: str = "designer",
+    *,
+    tools: WorkflowTools | None = None,
+) -> ResolvedPhaseAgent:
     return ResolvedPhaseAgent(
         id=agent_id,
         role="design specialist",
@@ -70,6 +74,7 @@ def _agent(agent_id: str = "designer") -> ResolvedPhaseAgent:
         prompt="Create the design artifact.",
         produces=["artifacts/design.md"],
         requires=["json_output"],
+        tools=tools or WorkflowTools(required=["github_write"], optional=["linear_write"]),
     )
 
 
@@ -100,6 +105,7 @@ def test_phase_execution_targets_use_agents_and_agent_filter() -> None:
     assert filtered[0].agent_id == "verifier"
     assert filtered[0].provider == "fake"
     assert filtered[0].synthetic is False
+    assert filtered[0].tools.required == ["github_write"]
 
 
 def test_phase_execution_targets_fall_back_to_phase_provider() -> None:
@@ -167,12 +173,18 @@ def test_build_execution_prompt_includes_target_contract_and_brief() -> None:
     target = phase_execution_targets(brief)[0]
 
     prompt = build_execution_prompt(brief, target)
+    expected_artifact_path = Path("/tmp/feat/.pal/artifacts/design.md").resolve()
 
     assert prompt.startswith("# pal flow execution request")
     assert "Agent ID: `designer`" in prompt
     assert "Create the design artifact." in prompt
-    assert "`artifacts/design.md`" in prompt
+    assert f"`artifacts/design.md` -> `{expected_artifact_path}`" in prompt
     assert "`json_output`" in prompt
+    assert "## Tool Expectations" in prompt
+    assert "Required tools:" in prompt
+    assert "`github_write`" in prompt
+    assert "Optional tools:" in prompt
+    assert "`linear_write`" in prompt
     assert "# pal flow phase brief" in prompt
 
 
@@ -183,6 +195,31 @@ def test_build_execution_prompt_handles_target_without_artifact_lists() -> None:
 
     assert "No agent-specific produced artifacts configured." in prompt
     assert "No agent-specific requirements configured." in prompt
+    assert "No agent-specific tool expectations configured." in prompt
+
+
+def test_build_execution_prompt_handles_required_only_tool_expectations() -> None:
+    target = phase_execution_targets(
+        _brief(agents=[_agent(tools=WorkflowTools(required=["github_write"]))])
+    )[0]
+
+    prompt = build_execution_prompt(_brief(), target)
+
+    assert "Required tools:" in prompt
+    assert "`github_write`" in prompt
+    assert "Optional tools:" not in prompt
+
+
+def test_build_execution_prompt_handles_optional_only_tool_expectations() -> None:
+    target = phase_execution_targets(
+        _brief(agents=[_agent(tools=WorkflowTools(optional=["linear_write"]))])
+    )[0]
+
+    prompt = build_execution_prompt(_brief(), target)
+
+    assert "Required tools:" not in prompt
+    assert "Optional tools:" in prompt
+    assert "`linear_write`" in prompt
 
 
 def test_execution_status_requires_successful_records() -> None:
@@ -191,6 +228,10 @@ def test_execution_status_requires_successful_records() -> None:
     assert execution_status([]) == "failed"
     data = _record().to_dict()
     assert data["target"]["agent_id"] == "designer"
+    assert data["target"]["tools"] == {
+        "required": ["github_write"],
+        "optional": ["linear_write"],
+    }
     assert data["paths"]["manifest"] == "/tmp/manifest.json"
 
 

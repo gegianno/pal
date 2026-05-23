@@ -7,6 +7,57 @@ from typing import Any, Callable, Protocol
 from ..models import FlowRun
 
 
+PROVIDER_STATE_ERROR = "provider_state_inaccessible"
+
+
+def provider_state_access_error(provider: str, stderr: str) -> str:
+    text = stderr.lower()
+    provider_name = provider.lower()
+    if provider_name == "codex" and _codex_state_access_blocked(text):
+        return _provider_state_message(
+            provider="Codex",
+            state_dir="CODEX_HOME or ~/.codex",
+            stderr=stderr,
+        )
+    if provider_name == "claude" and _claude_state_access_blocked(text):
+        return _provider_state_message(
+            provider="Claude Code",
+            state_dir="Claude Code's logged-in state directory",
+            stderr=stderr,
+        )
+    return ""
+
+
+def _codex_state_access_blocked(text: str) -> bool:
+    return (
+        "codex cannot access session files" in text
+        or ("attempt to write a readonly database" in text and ".codex" in text)
+        or ("failed to persist config.toml" in text and ".codex" in text)
+    )
+
+
+def _claude_state_access_blocked(text: str) -> bool:
+    blocked = (
+        "permission denied" in text
+        or "operation not permitted" in text
+        or "eacces" in text
+        or "readonly" in text
+    )
+    return blocked and (".claude" in text or "claude" in text and "state" in text)
+
+
+def _provider_state_message(*, provider: str, state_dir: str, stderr: str) -> str:
+    original = stderr.strip()
+    return (
+        f"{provider} provider state is not accessible.\n\n"
+        f"pal is using the local {provider} CLI with an existing logged-in account. "
+        f"Run pal from a process that can access {state_dir}, or grant that provider state "
+        "directory to the outer sandbox. Do not copy provider credentials into the worktree, "
+        "and do not pass provider state directories as agent writable roots.\n\n"
+        f"Original provider stderr:\n{original}"
+    ).strip()
+
+
 @dataclass(frozen=True)
 class ProviderResult:
     provider: str

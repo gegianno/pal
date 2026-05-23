@@ -11,6 +11,7 @@ from pal.flow.workflows.models import (
     WorkflowDefaults,
     WorkflowPhase,
     WorkflowSpec,
+    WorkflowTools,
 )
 
 
@@ -29,7 +30,9 @@ def _run(phase: FlowPhase = FlowPhase.DESIGN) -> FlowRun:
         workflow_name="dev-complex",
         work_type="dev",
         approvals={"design": "2026-04-27T00:00:00Z"},
+        approval_reasons={"design": "Accepted manual verification."},
         phase_history=[{"phase": phase.value}],
+        request="Fix the select styling regression.",
     )
 
 
@@ -66,6 +69,10 @@ def _workflow(agent: WorkflowAgent | None = None) -> WorkflowSpec:
                         prompt="Design the implementation.",
                         produces=["artifacts/design.md"],
                         requires=["json_output"],
+                        tools=WorkflowTools(
+                            required=["github_write"],
+                            optional=["linear_write"],
+                        ),
                     )
                 ],
                 required_artifacts=["artifacts/design.md"],
@@ -95,19 +102,36 @@ def test_build_phase_brief_resolves_agents_guidance_and_serializes() -> None:
 
     data = brief.to_dict()
     markdown = brief.to_markdown()
+    expected_artifact_path = Path("/tmp/feat/.pal/artifacts/design.md").resolve()
 
     assert data["rendered_at"] == "2026-04-27T00:01:00Z"
     assert data["phase"]["id"] == "design"
     assert data["phase"]["policy"] == "co-driver"
     assert data["phase"]["requires_approval"] is True
     assert data["agents"][0]["provider"] == "claude"
+    assert data["agents"][0]["tools"] == {
+        "required": ["github_write"],
+        "optional": ["linear_write"],
+    }
     assert data["provider_guidance"]["claude"].startswith("Use Claude Code")
     assert data["events"][0]["summary"] == "started"
     assert data["events"][1]["phase"] == ""
     assert data["paths"]["markdown"] == "/tmp/brief.md"
+    assert data["run"]["request"] == "Fix the select styling regression."
+    assert data["approval_reasons"] == {"design": "Accepted manual verification."}
     assert "# pal flow phase brief" in markdown
+    assert "## User Request" in markdown
+    assert "Fix the select styling regression." in markdown
     assert "`designer` (claude)" in markdown
-    assert "artifacts/design.md" in markdown
+    assert "## Artifact Path Rules" in markdown
+    assert "Do not create a nested `artifacts/` directory" in markdown
+    assert "## Tool Delegation" in markdown
+    assert "Pal does not manage external connector auth" in markdown
+    assert "GitHub, Linear, Slack" in markdown
+    assert "Required tools: github_write" in markdown
+    assert "Optional tools: linear_write" in markdown
+    assert f"`artifacts/design.md` -> `{expected_artifact_path}`" in markdown
+    assert "Approval reasons: `design: Accepted manual verification.`" in markdown
     assert "/tmp/feat/.pal/artifacts" in markdown
 
 
@@ -134,6 +158,7 @@ def test_build_phase_brief_handles_runs_without_workflows() -> None:
             "workflow_name": "",
             "work_type": "",
             "policies": {"verify": "observer"},
+            "request": "",
         }
     )
 
@@ -150,6 +175,24 @@ def test_build_phase_brief_handles_runs_without_workflows() -> None:
     assert brief.provider_guidance["fake"].startswith("No provider-specific")
     assert "No agents configured" in brief.to_markdown()
     assert "No required artifacts configured" in brief.to_markdown()
+    assert "No user request recorded." in brief.to_markdown()
+
+
+def test_build_phase_brief_renders_verification_status_contract() -> None:
+    brief = build_phase_brief(
+        run=_run(FlowPhase.VERIFY),
+        workflow=None,
+        events=[],
+        rendered_at="2026-04-27T00:01:00Z",
+        default_provider="fake",
+    )
+    markdown = brief.to_markdown()
+
+    assert "## Verification Outcome Contract" in markdown
+    assert "`passed`" in markdown
+    assert "`blocked`" in markdown
+    assert "supervisor approval with a reason" in markdown
+    assert "`failed`" in markdown
 
 
 def test_build_phase_brief_uses_workflow_default_provider_without_agents() -> None:
@@ -199,6 +242,8 @@ def test_build_phase_brief_renders_agent_without_requirements() -> None:
 
     assert "`writer` (claude)" in markdown
     assert "Requires:" not in markdown
+    assert "Required tools:" not in markdown
+    assert "Optional tools:" not in markdown
 
 
 def test_build_phase_brief_rejects_agents_without_context_or_provider() -> None:

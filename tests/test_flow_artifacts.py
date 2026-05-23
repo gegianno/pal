@@ -6,6 +6,10 @@ import pytest
 
 from pal.flow.artifacts import (
     ArtifactPathError,
+    VerificationStatus,
+    VerificationStatusError,
+    is_verification_artifact,
+    read_verification_outcome,
     resolve_artifact_path,
     validate_artifact_reference,
     validate_required_artifacts,
@@ -86,3 +90,103 @@ def test_artifact_resolution_rejects_symlink_escape(tmp_path: Path) -> None:
 
     with pytest.raises(ArtifactPathError, match="must stay under"):
         resolve_artifact_path(run, workspace, "linked.md")
+
+
+def test_read_verification_outcome_reads_standard_json_status(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    workspace = tmp_path / "_wt" / "feat"
+    artifact = Path(run.artifact_root) / "verification.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text(
+        '# Verification\n\n```json\n{"status": "blocked", "reason": "browser"}\n```\n',
+        encoding="utf-8",
+    )
+
+    outcome = read_verification_outcome(
+        run,
+        workspace_dir=workspace,
+        artifact="artifacts/verification.md",
+    )
+
+    assert outcome.status == VerificationStatus.BLOCKED
+    assert outcome.payload["reason"] == "browser"
+    assert outcome.path == str(artifact.resolve())
+    assert outcome.to_dict()["status"] == "blocked"
+    assert is_verification_artifact("artifacts/verification.md") is True
+    assert is_verification_artifact("verification.md") is True
+    assert is_verification_artifact("artifacts/regression.md") is False
+
+
+def test_read_verification_outcome_accepts_status_line(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    artifact = Path(run.artifact_root) / "verification.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text("status: failed\n", encoding="utf-8")
+
+    outcome = read_verification_outcome(run, workspace_dir=tmp_path / "_wt" / "feat")
+
+    assert outcome.status == VerificationStatus.FAILED
+
+
+def test_read_verification_outcome_accepts_whole_json_document(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    artifact = Path(run.artifact_root) / "verification.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text('{"status": "blocked", "checks": []}', encoding="utf-8")
+
+    outcome = read_verification_outcome(run, workspace_dir=tmp_path / "_wt" / "feat")
+
+    assert outcome.status == VerificationStatus.BLOCKED
+    assert outcome.payload["checks"] == []
+
+
+def test_read_verification_outcome_ignores_unusable_json_blocks(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    artifact = Path(run.artifact_root) / "verification.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text(
+        '```json\n{"detail": "missing status"}\n```\n```json\nnot json\n```\nstatus: passed\n',
+        encoding="utf-8",
+    )
+
+    outcome = read_verification_outcome(run, workspace_dir=tmp_path / "_wt" / "feat")
+
+    assert outcome.status == VerificationStatus.PASSED
+
+
+def test_read_verification_outcome_rejects_missing_file(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+
+    with pytest.raises(VerificationStatusError, match="Verification artifact is missing"):
+        read_verification_outcome(run, workspace_dir=tmp_path / "_wt" / "feat")
+
+
+def test_read_verification_outcome_ignores_whole_json_non_object(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    artifact = Path(run.artifact_root) / "verification.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text('["passed"]', encoding="utf-8")
+
+    with pytest.raises(VerificationStatusError, match="must declare status"):
+        read_verification_outcome(run, workspace_dir=tmp_path / "_wt" / "feat")
+
+
+def test_read_verification_outcome_rejects_missing_or_custom_status(tmp_path: Path) -> None:
+    run = _run(tmp_path)
+    artifact = Path(run.artifact_root) / "verification.md"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text(
+        '```json\n{"status": "passed_with_browser_blocked_by_sandbox"}\n```',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(VerificationStatusError, match="unsupported status"):
+        read_verification_outcome(run, workspace_dir=tmp_path / "_wt" / "feat")
+
+    artifact.write_text("No structured status.\n", encoding="utf-8")
+    with pytest.raises(VerificationStatusError, match="must declare status"):
+        read_verification_outcome(run, workspace_dir=tmp_path / "_wt" / "feat")
+
+    artifact.write_text("{not json", encoding="utf-8")
+    with pytest.raises(VerificationStatusError, match="must declare status"):
+        read_verification_outcome(run, workspace_dir=tmp_path / "_wt" / "feat")

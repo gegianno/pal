@@ -16,6 +16,12 @@ except Exception:  # pragma: no cover - only exercised on Python <3.11 runtimes.
 class CodexConfig:
     sandbox: str = "workspace-write"  # read-only | workspace-write | danger-full-access
     approval: str = "on-request"  # untrusted | on-failure | on-request | never
+    # Non-interactive flow execution cannot surface native approval prompts safely.
+    headless_approval: str = "never"  # untrusted | on-failure | on-request | never
+    # pal persists its own execution state; Codex session files add fragility in nested sandboxes.
+    headless_ephemeral: bool = True
+    # Optional isolation for headless runs; auth still uses CODEX_HOME.
+    headless_ignore_user_config: bool = False
     full_auto: bool = False
     # Extra writable roots to pass through to Codex as repeated `--add-dir <path>` flags.
     # Useful for tool caches like ~/.npm or ~/.cache/prisma when running in workspace-write mode.
@@ -184,6 +190,12 @@ def _apply_dict(cfg: PalConfig, d: dict[str, Any]) -> None:
             cfg.codex.sandbox = str(codex["sandbox"])
         if "approval" in codex:
             cfg.codex.approval = str(codex["approval"])
+        if "headless_approval" in codex:
+            cfg.codex.headless_approval = str(codex["headless_approval"])
+        if "headless_ephemeral" in codex:
+            cfg.codex.headless_ephemeral = bool(codex["headless_ephemeral"])
+        if "headless_ignore_user_config" in codex:
+            cfg.codex.headless_ignore_user_config = bool(codex["headless_ignore_user_config"])
         if "full_auto" in codex:
             cfg.codex.full_auto = bool(codex["full_auto"])
         # Support both `add_dirs = [...]` and legacy-ish `add_dir = "..."`.

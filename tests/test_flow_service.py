@@ -5,11 +5,11 @@ from pathlib import Path
 import pytest
 
 from pal.flow.hooks import FlowHook, FlowHookDispatcher, HookCommandResult
-from pal.flow.models import FlowPhase, FlowStatus
+from pal.flow.models import FlowPhase, FlowRun, FlowStatus
 from pal.flow.providers.base import ProviderLaunchRequest, ProviderLaunchResult
 from pal.flow.providers.fake import FakeFlowProvider
 from pal.flow.service import LocalFlowService, default_policies
-from pal.flow.ship import FlowShipRepo, FlowShipSummary
+from pal.flow.pr import FlowPrRepo, FlowPrSummary
 from pal.flow.store import LocalFlowStore
 from pal.flow.workflows.library import LocalWorkflowLibrary, WorkflowSpecError
 from pal.workspaces import WorkspacePrepareResult, WorkspaceRepoResult
@@ -83,14 +83,14 @@ class RecordingWorkspaceBackend:
         )
 
 
-class RecordingShipper:
+class RecordingPrManager:
     def __init__(self, *, failed: bool = False) -> None:
         self.failed = failed
         self.calls: list[dict[str, object]] = []
 
-    def ship(self, **kwargs):  # noqa: ANN003, ANN201
+    def prepare(self, **kwargs):  # noqa: ANN003, ANN201
         self.calls.append(dict(kwargs))
-        return FlowShipSummary(
+        return FlowPrSummary(
             feature=str(kwargs["feature"]),
             run_id=str(kwargs["run_id"]),
             base=str(kwargs["base"]),
@@ -101,7 +101,7 @@ class RecordingShipper:
             pr_requested=bool(kwargs["create_pr"]),
             draft=bool(kwargs["draft"]),
             repos=[
-                FlowShipRepo(
+                FlowPrRepo(
                     repo="api",
                     path="/tmp/_wt/feat/api",
                     branch="feat/feat",
@@ -184,12 +184,65 @@ phases:
 """
 
 
+def _verify_workflow() -> str:
+    return """
+version: 1
+name: verify-flow
+work_type: dev
+defaults:
+  provider: fake
+phases:
+  - id: verify
+    policy: supervisor
+    required_artifacts:
+      - artifacts/verification.md
+    transitions:
+      - on: complete
+        to: pr
+    agents: []
+  - id: pr
+    agents: []
+"""
+
+
+def _verify_workflow_without_verification_artifact() -> str:
+    return """
+version: 1
+name: verify-without-verification-artifact
+work_type: dev
+defaults:
+  provider: fake
+phases:
+  - id: verify
+    requires_approval: true
+    required_artifacts:
+      - artifacts/notes.md
+      - artifacts/evidence.md
+    transitions:
+      - on: complete
+        to: pr
+    agents: []
+  - id: pr
+    agents: []
+"""
+
+
+def _write_verification_artifact(run: FlowRun, status: str) -> None:
+    root = Path(run.artifact_root)
+    root.mkdir(parents=True, exist_ok=True)
+    (root / "verification.md").write_text(
+        f'# Verification\n\n```json\n{{"status": "{status}"}}\n```\n',
+        encoding="utf-8",
+    )
+
+
 def test_default_policies_match_routine_flow_defaults() -> None:
     policies = default_policies()
 
     assert policies["explore"].value == "autonomous"
     assert policies["verify"].value == "supervisor"
-    assert policies["review"].value == "observer"
+    assert policies["pr"].value == "supervisor"
+    assert policies["review"].value == "supervisor"
 
 
 def test_flow_service_start_persists_run_and_provider_events(tmp_path: Path) -> None:
@@ -227,6 +280,28 @@ def test_flow_service_start_persists_run_and_provider_events(tmp_path: Path) -> 
     assert events[1].actor == "fake"
     assert events[1].payload["summary"] == "fake provider initialized run run_test"
     assert service.events("feat", "run_test") == events
+
+
+def test_flow_service_start_persists_user_request(tmp_path: Path) -> None:
+    store = LocalFlowStore(tmp_path / "_wt")
+    service = LocalFlowService(
+        store=store,
+        providers={"fake": FakeFlowProvider()},
+        clock=lambda: "2026-04-27T00:00:00Z",
+    )
+
+    run = service.start(
+        feature="feat",
+        repos=[],
+        request="  Fix the multi-select border and focus styling.  ",
+    )
+
+    assert run.request == "Fix the multi-select border and focus styling."
+    assert service.status("feat").request == "Fix the multi-select border and focus styling."
+    assert store.read_run_json("feat", run.run_id, "request.json") == {
+        "request": "Fix the multi-select border and focus styling."
+    }
+    assert service.events("feat")[0].payload["request_chars"] == len(run.request)
 
 
 def test_flow_service_dispatches_configured_hooks_for_events(tmp_path: Path) -> None:
@@ -369,6 +444,73 @@ def test_flow_service_accepts_supported_agent_capability_flags(tmp_path: Path) -
     assert result.valid is True
 
 
+def test_flow_service_accepts_known_delegated_tools(tmp_path: Path) -> None:
+    _write_workflow(
+        tmp_path,
+        "github-write",
+        """
+version: 1
+name: github-write
+work_type: dev
+defaults:
+  provider: fake
+phases:
+  - id: pr
+    agents:
+      - id: pr-manager
+        role: PR manager
+        requires:
+          - local_headless
+        tools:
+          required:
+            - github_write
+          optional:
+            - linear_write
+""",
+    )
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+
+    result = service.validate_workflow("github-write")
+
+    assert result.valid is True
+
+
+def test_flow_service_validates_unknown_delegated_tools(tmp_path: Path) -> None:
+    _write_workflow(
+        tmp_path,
+        "unknown-tool",
+        """
+version: 1
+name: unknown-tool
+work_type: dev
+defaults:
+  provider: fake
+phases:
+  - id: pr
+    agents:
+      - id: pr-manager
+        role: PR manager
+        tools:
+          required:
+            - figma_write
+""",
+    )
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+
+    result = service.validate_workflow("unknown-tool")
+
+    assert result.valid is False
+    assert "unknown delegated tool 'figma_write'" in result.errors[0]
+
+
 def test_flow_service_validates_unknown_agent_requirement(tmp_path: Path) -> None:
     _write_workflow(tmp_path, "unknown-req", _workflow_body(requirement="quantum_gpu"))
     service = LocalFlowService(
@@ -485,17 +627,17 @@ def test_flow_service_start_rejects_workspace_modes_without_backend(tmp_path: Pa
         service.start(feature="feat", repos=[], workspace_mode="reuse")
 
 
-def test_flow_service_ship_writes_body_manifest_and_event(tmp_path: Path) -> None:
-    shipper = RecordingShipper()
+def test_flow_service_pr_writes_body_manifest_and_event(tmp_path: Path) -> None:
+    pr_manager = RecordingPrManager()
     store = LocalFlowStore(tmp_path / "_wt")
     service = LocalFlowService(
         store=store,
         providers={"fake": FakeFlowProvider()},
-        shipper=shipper,
+        pr_manager=pr_manager,
     )
     run = service.start(feature="feat", repos=["api"], mode="complex")
 
-    summary = service.ship(
+    summary = service.pr(
         "feat",
         base="develop",
         title="",
@@ -506,43 +648,43 @@ def test_flow_service_ship_writes_body_manifest_and_event(tmp_path: Path) -> Non
         draft=True,
     )
 
-    body_path = store.ship_dir("feat", run.run_id) / "body.md"
-    manifest_path = store.ship_dir("feat", run.run_id) / "manifest.json"
+    body_path = store.pr_dir("feat", run.run_id) / "body.md"
+    manifest_path = store.pr_dir("feat", run.run_id) / "manifest.json"
     assert summary.status == "completed"
-    assert shipper.calls[0]["repos"] == ["api"]
-    assert shipper.calls[0]["feature_dir"] == store.feature_dir("feat")
-    assert shipper.calls[0]["base"] == "develop"
-    assert shipper.calls[0]["title"] == "feat: complex"
+    assert pr_manager.calls[0]["repos"] == ["api"]
+    assert pr_manager.calls[0]["feature_dir"] == store.feature_dir("feat")
+    assert pr_manager.calls[0]["base"] == "develop"
+    assert pr_manager.calls[0]["title"] == "feat: complex"
     assert body_path.read_text(encoding="utf-8") == "custom body\n"
     assert manifest_path.is_file()
     assert summary.paths == {"body": str(body_path), "manifest": str(manifest_path)}
-    assert service.events("feat")[-1].type == "flow.ship.completed"
+    assert service.events("feat")[-1].type == "flow.pr.completed"
 
 
-def test_flow_service_ship_uses_default_body_and_reports_failures(tmp_path: Path) -> None:
-    shipper = RecordingShipper(failed=True)
+def test_flow_service_pr_uses_default_body_and_reports_failures(tmp_path: Path) -> None:
+    pr_manager = RecordingPrManager(failed=True)
     store = LocalFlowStore(tmp_path / "_wt")
     _write_workflow(tmp_path, "dev-complex", _workflow_body())
     service = LocalFlowService(
         store=store,
         providers={"fake": FakeFlowProvider()},
         workflow_library=LocalWorkflowLibrary(tmp_path),
-        shipper=shipper,
+        pr_manager=pr_manager,
     )
     run = service.start(feature="feat", repos=[], workflow="dev-complex")
 
-    summary = service.ship("feat", repos=["api"], base=" ", dry_run=True)
+    summary = service.pr("feat", repos=["api"], base=" ", dry_run=True)
 
-    body = (store.ship_dir("feat", run.run_id) / "body.md").read_text(encoding="utf-8")
+    body = (store.pr_dir("feat", run.run_id) / "body.md").read_text(encoding="utf-8")
     assert summary.status == "failed"
     assert "Workflow: `dev-complex`" in body
     assert "Work type: `dev`" in body
     assert "Repos: `api`" in body
-    assert shipper.calls[0]["base"] == "main"
-    assert service.events("feat")[-1].type == "flow.ship.failed"
+    assert pr_manager.calls[0]["base"] == "main"
+    assert service.events("feat")[-1].type == "flow.pr.failed"
 
 
-def test_flow_service_ship_requires_message_when_committing(tmp_path: Path) -> None:
+def test_flow_service_pr_requires_message_when_committing(tmp_path: Path) -> None:
     service = LocalFlowService(
         store=LocalFlowStore(tmp_path / "_wt"),
         providers={"fake": FakeFlowProvider()},
@@ -550,7 +692,7 @@ def test_flow_service_ship_requires_message_when_committing(tmp_path: Path) -> N
     service.start(feature="feat", repos=[])
 
     with pytest.raises(ValueError, match="--message is required"):
-        service.ship("feat", commit=True, commit_message=" ")
+        service.pr("feat", commit=True, commit_message=" ")
 
 
 def test_flow_service_start_allows_cli_overrides_for_workflow(tmp_path: Path) -> None:
@@ -695,6 +837,113 @@ def test_flow_service_advance_can_force_missing_artifacts(tmp_path: Path) -> Non
 
     assert advanced.current_phase == FlowPhase.IMPLEMENT
     assert service.events("feat")[-1].payload["force_artifacts"] is True
+
+
+def test_flow_service_verify_passed_status_can_advance(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "verify-flow", _verify_workflow())
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+    run = service.start(
+        feature="feat",
+        repos=[],
+        workflow="verify-flow",
+        phase=FlowPhase.VERIFY,
+    )
+    _write_verification_artifact(run, "passed")
+
+    advanced = service.advance("feat")
+
+    assert advanced.current_phase == FlowPhase.PR
+
+
+def test_flow_service_verify_without_verification_artifact_uses_normal_gates(
+    tmp_path: Path,
+) -> None:
+    _write_workflow(
+        tmp_path,
+        "verify-without-verification-artifact",
+        _verify_workflow_without_verification_artifact(),
+    )
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+        clock=lambda: "2026-04-27T00:00:00Z",
+    )
+    run = service.start(
+        feature="feat",
+        repos=[],
+        workflow="verify-without-verification-artifact",
+        phase=FlowPhase.VERIFY,
+    )
+    artifact_root = Path(run.artifact_root)
+    artifact_root.mkdir(parents=True)
+    (artifact_root / "notes.md").write_text("notes\n", encoding="utf-8")
+    (artifact_root / "evidence.md").write_text("evidence\n", encoding="utf-8")
+
+    approved = service.approve("feat", reason="Manual verification artifact is not required.")
+    advanced = service.advance("feat")
+
+    assert approved.approval_reasons == {"verify": "Manual verification artifact is not required."}
+    assert advanced.current_phase == FlowPhase.PR
+
+
+def test_flow_service_verify_blocked_status_requires_approval_reason(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "verify-flow", _verify_workflow())
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+        clock=lambda: "2026-04-27T00:00:00Z",
+    )
+    run = service.start(
+        feature="feat",
+        repos=[],
+        workflow="verify-flow",
+        phase=FlowPhase.VERIFY,
+    )
+    _write_verification_artifact(run, "blocked")
+
+    with pytest.raises(ValueError, match="blocked"):
+        service.advance("feat")
+    with pytest.raises(ValueError, match="approval reason"):
+        service.approve("feat")
+    approved = service.approve("feat", reason="Browser check was blocked in sandbox.")
+    advanced = service.advance("feat")
+
+    assert approved.approvals == {"verify": "2026-04-27T00:00:00Z"}
+    assert approved.approval_reasons == {"verify": "Browser check was blocked in sandbox."}
+    assert advanced.current_phase == FlowPhase.PR
+    assert service.events("feat")[-2].payload == {
+        "phase": "verify",
+        "approved_at": "2026-04-27T00:00:00Z",
+        "reason": "Browser check was blocked in sandbox.",
+        "verification_status": "blocked",
+    }
+
+
+def test_flow_service_verify_failed_status_cannot_advance_or_approve(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "verify-flow", _verify_workflow())
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+    run = service.start(
+        feature="feat",
+        repos=[],
+        workflow="verify-flow",
+        phase=FlowPhase.VERIFY,
+    )
+    _write_verification_artifact(run, "failed")
+
+    with pytest.raises(ValueError, match="Verification status 'failed' cannot advance"):
+        service.advance("feat")
+    with pytest.raises(ValueError, match="verification status 'failed' and cannot be approved"):
+        service.approve("feat", reason="Accept anyway.")
 
 
 def test_flow_service_execute_phase_runs_rendered_agents_and_records_artifacts(
@@ -859,7 +1108,7 @@ def test_flow_service_execute_phase_rejects_completed_runs_and_unknown_provider(
         store=LocalFlowStore(tmp_path / "_wt"),
         providers={"fake": FakeFlowProvider()},
     )
-    service.start(feature="feat", repos=[], phase=FlowPhase.SHIP)
+    service.start(feature="feat", repos=[], phase=FlowPhase.REVIEW)
     service.advance("feat")
 
     with pytest.raises(ValueError, match="completed"):
@@ -1005,20 +1254,12 @@ def test_flow_service_advances_default_phase_order_and_completes(tmp_path: Path)
     )
     service.start(feature="feat", repos=[], phase=FlowPhase.REVIEW)
 
-    advanced = service.advance("feat")
     completed = service.advance("feat")
 
-    assert advanced.current_phase == FlowPhase.SHIP
-    assert advanced.status == FlowStatus.RUNNING
-    assert advanced.phase_history[-1]["from"] == "review"
-    assert advanced.phase_history[-1]["to"] == "ship"
     assert completed.status == FlowStatus.COMPLETED
-    assert completed.current_phase == FlowPhase.SHIP
+    assert completed.current_phase == FlowPhase.REVIEW
     assert completed.phase_history[-1]["to"] == ""
-    assert [event.type for event in service.events("feat")][-2:] == [
-        "flow.phase.advanced",
-        "flow.run.completed",
-    ]
+    assert service.events("feat")[-1].type == "flow.run.completed"
     with pytest.raises(ValueError, match="completed"):
         service.advance("feat")
 

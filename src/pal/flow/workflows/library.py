@@ -11,6 +11,7 @@ from .models import (
     WorkflowDefaults,
     WorkflowPhase,
     WorkflowSpec,
+    WorkflowTools,
     WorkflowTransition,
 )
 
@@ -24,8 +25,8 @@ _DEFAULT_POLICIES = {
     FlowPhase.DESIGN.value: FlowPolicy.AUTONOMOUS,
     FlowPhase.IMPLEMENT.value: FlowPolicy.AUTONOMOUS,
     FlowPhase.VERIFY.value: FlowPolicy.SUPERVISOR,
-    FlowPhase.REVIEW.value: FlowPolicy.OBSERVER,
-    FlowPhase.SHIP.value: FlowPolicy.SUPERVISOR,
+    FlowPhase.PR.value: FlowPolicy.SUPERVISOR,
+    FlowPhase.REVIEW.value: FlowPolicy.SUPERVISOR,
 }
 
 
@@ -171,9 +172,20 @@ def _parse_agents(
                 prompt=_optional_str(agent_data, "prompt"),
                 produces=_str_list(agent_data.get("produces", []), "produces", path),
                 requires=_str_list(agent_data.get("requires", []), "requires", path),
+                tools=_parse_tools(agent_data.get("tools", {}), path),
             )
         )
     return agents
+
+
+def _parse_tools(raw_tools: Any, path: Path) -> WorkflowTools:
+    if raw_tools is None:
+        return WorkflowTools()
+    tools = _mapping(raw_tools, "tools", path)
+    return WorkflowTools(
+        required=_str_list(tools.get("required", []), "tools.required", path),
+        optional=_str_list(tools.get("optional", []), "tools.optional", path),
+    )
 
 
 def _parse_transitions(raw_transitions: Any, path: Path) -> list[WorkflowTransition]:

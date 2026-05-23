@@ -342,9 +342,9 @@ def test_implement_claude_uses_configured_permission_mode(
 
     monkeypatch.setattr("pal.cli.run_claude_interactive", fake_run_claude)
 
-    result = runner.invoke(app, ["implement", feature, "claude", "--root", str(root), "Ship it"])
+    result = runner.invoke(app, ["implement", feature, "claude", "--root", str(root), "Build it"])
     assert result.exit_code == 0, result.output
-    assert calls == [["--permission-mode", "plan", "Ship it"]]
+    assert calls == [["--permission-mode", "plan", "Build it"]]
 
 
 def test_run_claude_merges_agent_and_claude_add_dirs(

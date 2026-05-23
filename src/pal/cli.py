@@ -865,6 +865,9 @@ def config_init(
         "[codex]\n"
         'sandbox = "workspace-write"\n'
         'approval = "on-request"\n'
+        'headless_approval = "never"\n'
+        "headless_ephemeral = true\n"
+        "headless_ignore_user_config = false\n"
         "full_auto = false\n"
         "\n"
         "[claude]\n"
@@ -911,7 +914,11 @@ def config_show(
             f"repos allowlist: {cfg.repos if cfg.repos else '(auto)'}\n"
             f"editor: {cfg.editor or '(auto)'}\n"
             f"agent: add_dirs={cfg.agent.add_dirs}\n"
-            f"codex: sandbox={cfg.codex.sandbox} approval={cfg.codex.approval} full_auto={cfg.codex.full_auto}\n"
+            f"codex: sandbox={cfg.codex.sandbox} approval={cfg.codex.approval} "
+            f"headless_approval={cfg.codex.headless_approval} "
+            f"headless_ephemeral={cfg.codex.headless_ephemeral} "
+            f"headless_ignore_user_config={cfg.codex.headless_ignore_user_config} "
+            f"full_auto={cfg.codex.full_auto}\n"
             f"codex: add_dirs={cfg.codex.add_dirs}\n"
             f"claude: permission_mode={cfg.claude.permission_mode}\n"
             f"claude: model={cfg.claude.model or '(default)'} allow_bypass_permissions={cfg.claude.allow_bypass_permissions}\n"

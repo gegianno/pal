@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 import typer
@@ -136,6 +137,27 @@ phases:
 """
 
 
+def _verify_workflow() -> str:
+    return """
+version: 1
+name: verify-flow
+work_type: dev
+defaults:
+  provider: fake
+phases:
+  - id: verify
+    policy: supervisor
+    required_artifacts:
+      - artifacts/verification.md
+    transitions:
+      - on: complete
+        to: pr
+    agents: []
+  - id: pr
+    agents: []
+"""
+
+
 def test_flow_start_status_and_watch_commands(tmp_path: Path) -> None:
     result = runner.invoke(
         app,
@@ -253,6 +275,88 @@ def test_flow_start_with_workflow_uses_spec_defaults(tmp_path: Path) -> None:
     assert "design" in status.output
     assert "api" in status.output
     assert "phase_history" in status.output
+
+
+def test_flow_start_records_inline_request(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "flow",
+            "start",
+            "feat",
+            "--root",
+            str(tmp_path),
+            "--request",
+            "Fix the multi-select styling.",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    run = LocalFlowStore(tmp_path / "_wt").load_run("feat")
+    assert run.request == "Fix the multi-select styling."
+
+
+def test_flow_start_records_request_file(tmp_path: Path) -> None:
+    request_file = tmp_path / "request.md"
+    request_file.write_text("Fix the multi-select from the screenshot.\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "flow",
+            "start",
+            "feat",
+            "--root",
+            str(tmp_path),
+            "--request-file",
+            str(request_file),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+
+    run = LocalFlowStore(tmp_path / "_wt").load_run("feat")
+    assert run.request == "Fix the multi-select from the screenshot."
+
+
+def test_flow_start_rejects_conflicting_request_sources(tmp_path: Path) -> None:
+    request_file = tmp_path / "request.md"
+    request_file.write_text("file request\n", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "flow",
+            "start",
+            "feat",
+            "--root",
+            str(tmp_path),
+            "--request",
+            "inline request",
+            "--request-file",
+            str(request_file),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Use either --request or --request-file" in result.output
+
+
+def test_flow_start_reports_unreadable_request_file(tmp_path: Path) -> None:
+    result = runner.invoke(
+        app,
+        [
+            "flow",
+            "start",
+            "feat",
+            "--root",
+            str(tmp_path),
+            "--request-file",
+            str(tmp_path / "missing.md"),
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Cannot read request file" in result.output
 
 
 def test_flow_start_can_prepare_empty_workspace_from_cli(tmp_path: Path) -> None:
@@ -584,6 +688,42 @@ def test_flow_execute_runs_phase_and_writes_execution_manifest(tmp_path: Path) -
     ]
 
 
+def test_flow_execute_returns_nonzero_for_provider_state_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stderr_path = tmp_path / "stderr.log"
+    manifest_path = tmp_path / "manifest.json"
+    execution = SimpleNamespace(
+        status="failed",
+        returncode=1,
+        target=SimpleNamespace(provider="codex", agent_id="verifier"),
+        diagnostics={"error": "provider_state_inaccessible"},
+        paths={"manifest": str(manifest_path), "stderr": str(stderr_path)},
+    )
+    summary = SimpleNamespace(
+        run=SimpleNamespace(run_id="run_1"),
+        phase=FlowPhase.VERIFY,
+        status="failed",
+        executions=[execution],
+    )
+
+    class Service:
+        def execute_phase(self, *_args, **_kwargs):  # noqa: ANN201
+            return summary
+
+    monkeypatch.setattr(flow_cli, "build_local_flow_service", lambda _cfg: Service())
+
+    result = runner.invoke(app, ["flow", "execute", "feat", "--root", str(tmp_path)])
+
+    plain = _plain(result.output)
+    assert result.exit_code == 1
+    assert "pal flow executed" in plain
+    assert "pal flow execution failed" in plain
+    assert "provider state is not accessible" in plain
+    assert "stderr.log" in plain
+
+
 def test_flow_execute_rejects_missing_agent(tmp_path: Path) -> None:
     _write_workflow(tmp_path, "dev-complex", _valid_workflow())
     start = runner.invoke(
@@ -620,7 +760,89 @@ def test_flow_execute_observer_policy_can_be_forced(tmp_path: Path) -> None:
     assert forced.exit_code == 0, forced.output
 
 
-def test_flow_ship_writes_manifest_for_feature_repos(tmp_path: Path) -> None:
+def test_flow_run_returns_nonzero_for_failed_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stderr_path = tmp_path / "stderr.log"
+    execution = SimpleNamespace(
+        status="failed",
+        returncode=1,
+        target=SimpleNamespace(provider="codex", agent_id="verifier"),
+        diagnostics={"error": "provider_state_inaccessible"},
+        paths={"stderr": str(stderr_path)},
+    )
+    step = SimpleNamespace(execution=SimpleNamespace(status="failed", executions=[execution]))
+    summary = SimpleNamespace(
+        run=SimpleNamespace(
+            run_id="run_1",
+            current_phase=FlowPhase.VERIFY,
+            status=FlowStatus.RUNNING,
+        ),
+        status="failed",
+        steps=[step],
+    )
+
+    class Service:
+        def run_flow(self, *_args, **_kwargs):  # noqa: ANN201
+            return summary
+
+    monkeypatch.setattr(flow_cli, "build_local_flow_service", lambda _cfg: Service())
+
+    result = runner.invoke(app, ["flow", "run", "feat", "--root", str(tmp_path)])
+
+    plain = _plain(result.output)
+    assert result.exit_code == 1
+    assert "pal flow run" in plain
+    assert "pal flow run failed" in plain
+    assert "provider state is not accessible" in plain
+
+
+def test_flow_cli_failure_line_helpers_cover_generic_paths() -> None:
+    completed = SimpleNamespace(
+        status="completed",
+        returncode=0,
+        target=SimpleNamespace(provider="codex", agent_id="done"),
+        diagnostics={},
+        paths={},
+    )
+    generic_error = SimpleNamespace(
+        status="failed",
+        returncode=3,
+        target=SimpleNamespace(provider="claude", agent_id="reviewer"),
+        diagnostics={"error": "model_timeout"},
+        paths={},
+    )
+    returncode_error = SimpleNamespace(
+        status="failed",
+        returncode=7,
+        target=SimpleNamespace(provider="fake", agent_id="tester"),
+        diagnostics={},
+        paths={},
+    )
+    execution_summary = SimpleNamespace(
+        status="failed",
+        executions=[completed, generic_error, returncode_error],
+    )
+    run_summary = SimpleNamespace(
+        steps=[
+            SimpleNamespace(execution=None),
+            SimpleNamespace(execution=SimpleNamespace(status="completed", executions=[])),
+            SimpleNamespace(execution=execution_summary),
+        ],
+    )
+
+    execution_lines = flow_cli._failed_execution_lines(execution_summary)
+    run_lines = flow_cli._failed_run_lines(run_summary)
+
+    assert "codex/done" not in "\n".join(execution_lines)
+    assert "claude/reviewer: model_timeout" in execution_lines
+    assert "fake/tester: returncode 7" in execution_lines
+    assert "flow run failed" in run_lines
+    assert "claude/reviewer: model_timeout" in run_lines
+
+
+def test_flow_pr_writes_manifest_for_feature_repos(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path / "_wt" / "feat" / "api")
     (repo / "README.md").write_text("changed\n", encoding="utf-8")
     start = runner.invoke(
@@ -633,17 +855,17 @@ def test_flow_ship_writes_manifest_for_feature_repos(tmp_path: Path) -> None:
         app,
         [
             "flow",
-            "ship",
+            "pr",
             "feat",
             "--root",
             str(tmp_path),
             "--commit",
             "--message",
-            "Ship feat",
+            "Open PR",
             "--push",
             "--create-pr",
             "--body",
-            "ship body",
+            "pr body",
         ],
     )
 
@@ -653,11 +875,15 @@ def test_flow_ship_writes_manifest_for_feature_repos(tmp_path: Path) -> None:
     assert "would_commit" in result.output
     assert "would_push" in result.output
     assert "would_create" in result.output
-    assert (store.ship_dir("feat", run_id) / "manifest.json").is_file()
-    assert _event_types(tmp_path, "feat")[-1] == "flow.ship.completed"
+    assert "Flow PR" in result.output
+    assert "would_commit" in result.output
+    assert "would_push" in result.output
+    assert "would_create" in result.output
+    assert (store.pr_dir("feat", run_id) / "manifest.json").is_file()
+    assert _event_types(tmp_path, "feat")[-1] == "flow.pr.completed"
 
 
-def test_flow_ship_reports_failures_and_body_file_errors(tmp_path: Path) -> None:
+def test_flow_pr_reports_failures_and_body_file_errors(tmp_path: Path) -> None:
     start = runner.invoke(app, ["flow", "start", "feat", "--root", str(tmp_path)])
     assert start.exit_code == 0, start.output
 
@@ -665,7 +891,7 @@ def test_flow_ship_reports_failures_and_body_file_errors(tmp_path: Path) -> None
         app,
         [
             "flow",
-            "ship",
+            "pr",
             "feat",
             "--root",
             str(tmp_path),
@@ -673,10 +899,10 @@ def test_flow_ship_reports_failures_and_body_file_errors(tmp_path: Path) -> None
             str(tmp_path / "missing.md"),
         ],
     )
-    no_repos = runner.invoke(app, ["flow", "ship", "feat", "--root", str(tmp_path)])
+    no_repos = runner.invoke(app, ["flow", "pr", "feat", "--root", str(tmp_path)])
     missing_message = runner.invoke(
         app,
-        ["flow", "ship", "feat", "--root", str(tmp_path), "--commit"],
+        ["flow", "pr", "feat", "--root", str(tmp_path), "--commit"],
     )
 
     assert missing_body.exit_code != 0
@@ -687,7 +913,7 @@ def test_flow_ship_reports_failures_and_body_file_errors(tmp_path: Path) -> None
     assert "--message is required" in _plain(missing_message.output)
 
 
-def test_flow_ship_exits_nonzero_when_ship_action_fails(tmp_path: Path) -> None:
+def test_flow_pr_exits_nonzero_when_pr_action_fails(tmp_path: Path) -> None:
     _init_repo(tmp_path / "_wt" / "feat" / "api")
     start = runner.invoke(
         app,
@@ -699,7 +925,7 @@ def test_flow_ship_exits_nonzero_when_ship_action_fails(tmp_path: Path) -> None:
         app,
         [
             "flow",
-            "ship",
+            "pr",
             "feat",
             "--root",
             str(tmp_path),
@@ -710,11 +936,11 @@ def test_flow_ship_exits_nonzero_when_ship_action_fails(tmp_path: Path) -> None:
 
     store = LocalFlowStore(tmp_path / "_wt")
     run_id = store.latest_run_id("feat")
-    manifest = store.read_run_json("feat", run_id, "ship/manifest.json")
+    manifest = store.read_run_json("feat", run_id, "pr/manifest.json")
     assert result.exit_code == 1
     assert isinstance(manifest, dict)
     assert "git push failed" in manifest["repos"][0]["error"]
-    assert _event_types(tmp_path, "feat")[-1] == "flow.ship.failed"
+    assert _event_types(tmp_path, "feat")[-1] == "flow.pr.failed"
 
 
 def test_flow_artifacts_command_reports_missing_and_present_artifacts(tmp_path: Path) -> None:
@@ -799,7 +1025,7 @@ def test_flow_advance_default_run_updates_phase(tmp_path: Path) -> None:
     status = runner.invoke(app, ["flow", "status", "feat", "--root", str(tmp_path)])
 
     assert "pal flow advanced" in result.output
-    assert "ship" in status.output
+    assert "completed" in status.output
 
 
 def test_flow_advance_reports_service_errors(tmp_path: Path) -> None:
@@ -837,6 +1063,57 @@ def test_flow_approve_and_advance_gated_workflow(tmp_path: Path) -> None:
         "flow.phase.approved",
         "flow.phase.advanced",
     ]
+
+
+def test_flow_approve_requires_reason_for_blocked_verification(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "verify-flow", _verify_workflow())
+    start = runner.invoke(
+        app,
+        [
+            "flow",
+            "start",
+            "feat",
+            "--root",
+            str(tmp_path),
+            "-w",
+            "verify-flow",
+            "--phase",
+            "verify",
+        ],
+    )
+    assert start.exit_code == 0, start.output
+    store = LocalFlowStore(tmp_path / "_wt")
+    run = store.load_state("feat", store.latest_run_id("feat"))
+    root = Path(run.artifact_root)
+    root.mkdir(parents=True)
+    (root / "verification.md").write_text(
+        '```json\n{"status": "blocked"}\n```',
+        encoding="utf-8",
+    )
+
+    missing_reason = runner.invoke(app, ["flow", "approve", "feat", "--root", str(tmp_path)])
+    approved = runner.invoke(
+        app,
+        [
+            "flow",
+            "approve",
+            "feat",
+            "--root",
+            str(tmp_path),
+            "--reason",
+            "Browser check blocked by sandbox.",
+        ],
+    )
+    status = runner.invoke(app, ["flow", "status", "feat", "--root", str(tmp_path)])
+    advance = runner.invoke(app, ["flow", "advance", "feat", "--root", str(tmp_path)])
+
+    assert missing_reason.exit_code != 0
+    assert "approval reason" in _plain(missing_reason.output)
+    assert approved.exit_code == 0, approved.output
+    assert "approval_reasons" in status.output
+    assert "Browser check blocked by sandbox." in status.output
+    assert advance.exit_code == 0, advance.output
+    assert "pr" in advance.output
 
 
 def test_flow_approve_rejects_unknown_phase(tmp_path: Path) -> None:
@@ -1091,7 +1368,7 @@ def test_flow_watch_prints_blank_phase_when_event_has_no_phase(tmp_path: Path) -
 
 
 def test_flow_cli_helpers_parse_and_raise() -> None:
-    assert flow_cli._parse_phase("ship") == FlowPhase.SHIP
+    assert flow_cli._parse_phase("pr") == FlowPhase.PR
     assert flow_cli._follow_should_continue(None, 100) is True
     assert flow_cli._follow_should_continue(1, 0) is True
     assert flow_cli._follow_should_continue(1, 1) is False

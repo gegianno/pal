@@ -4,7 +4,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .models import FlowPhase, FlowRun
-from .rendering import PhaseBrief, ResolvedPhaseAgent
+from .rendering import PhaseBrief, ResolvedPhaseAgent, artifact_lines
+from .workflows.models import WorkflowTools
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,7 @@ class PhaseExecutionTarget:
     prompt: str
     produces: list[str] = field(default_factory=list)
     requires: list[str] = field(default_factory=list)
+    tools: WorkflowTools = field(default_factory=WorkflowTools)
     synthetic: bool = False
 
     @classmethod
@@ -26,6 +28,7 @@ class PhaseExecutionTarget:
             prompt=agent.prompt,
             produces=list(agent.produces),
             requires=list(agent.requires),
+            tools=agent.tools,
         )
 
     @classmethod
@@ -46,6 +49,7 @@ class PhaseExecutionTarget:
             "prompt": self.prompt,
             "produces": list(self.produces),
             "requires": list(self.requires),
+            "tools": self.tools.to_dict(),
             "synthetic": self.synthetic,
         }
 
@@ -140,11 +144,19 @@ def build_execution_prompt(brief: PhaseBrief, target: PhaseExecutionTarget) -> s
         "",
         "## Produces",
         "",
-        *_list_lines(target.produces, empty="No agent-specific produced artifacts configured."),
+        *artifact_lines(
+            brief.run,
+            target.produces,
+            empty="No agent-specific produced artifacts configured.",
+        ),
         "",
         "## Requires",
         "",
         *_list_lines(target.requires, empty="No agent-specific requirements configured."),
+        "",
+        "## Tool Expectations",
+        "",
+        *_tool_expectation_lines(target.tools),
         "",
         "## Rendered Phase Brief",
         "",
@@ -171,6 +183,19 @@ def execution_status(records: list[PhaseExecutionRecord]) -> str:
 
 def _list_lines(items: list[str], *, empty: str) -> list[str]:
     return [f"- `{item}`" for item in items] if items else [empty]
+
+
+def _tool_expectation_lines(tools: WorkflowTools) -> list[str]:
+    if not tools.required and not tools.optional:
+        return ["No agent-specific tool expectations configured."]
+    lines: list[str] = []
+    if tools.required:
+        lines.append("Required tools:")
+        lines.extend(f"- `{tool}`" for tool in tools.required)
+    if tools.optional:
+        lines.append("Optional tools:")
+        lines.extend(f"- `{tool}`" for tool in tools.optional)
+    return lines
 
 
 def _phase_has_configured_agents(brief: PhaseBrief) -> bool:

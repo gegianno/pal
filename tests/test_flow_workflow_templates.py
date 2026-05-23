@@ -46,14 +46,30 @@ def test_render_complex_workflow_template_is_valid_spec(tmp_path: Path) -> None:
         FlowPhase.DESIGN,
         FlowPhase.IMPLEMENT,
         FlowPhase.VERIFY,
+        FlowPhase.PR,
         FlowPhase.REVIEW,
-        FlowPhase.SHIP,
     ]
     assert spec.phases[0].policy == FlowPolicy.CO_DRIVER
     assert spec.phases[1].requires_approval is True
+    assert spec.phase(FlowPhase.PR).requires_approval is True
+    assert spec.phase(FlowPhase.REVIEW).policy == FlowPolicy.SUPERVISOR
+    pr_agent = spec.phase(FlowPhase.PR).agents[0]
+    review_agent = spec.phase(FlowPhase.REVIEW).agents[0]
+    assert pr_agent.requires == ["local_headless", "json_output"]
+    assert pr_agent.tools.required == ["github_write"]
+    assert pr_agent.tools.optional == ["linear_write"]
+    assert "native GitHub tools" in pr_agent.prompt
+    assert review_agent.tools.optional == ["github_read", "linear_read"]
     assert spec.transition_target(FlowPhase.IMPLEMENT, "blocked") == FlowPhase.DESIGN
+    assert spec.transition_target(FlowPhase.VERIFY, "complete") == FlowPhase.PR
+    assert spec.transition_target(FlowPhase.PR, "complete") == FlowPhase.REVIEW
+    assert spec.transition_target(FlowPhase.REVIEW, "complete") is None
     assert len(spec.phases[0].agents) == 2
     assert len(spec.phases[2].agents) == 2
+    for phase in spec.phases:
+        produced = [artifact for agent in phase.agents for artifact in agent.produces]
+        assert len(produced) == len(set(produced)), phase.id.value
+        assert set(produced).issubset(set(phase.required_artifacts)), phase.id.value
 
 
 def test_render_routine_workflow_template_uses_empty_repos() -> None:
@@ -67,6 +83,10 @@ def test_render_routine_workflow_template_uses_empty_repos() -> None:
     assert "repos: []" in rendered
     assert "provider: claude" in rendered
     assert "mode: routine" in rendered
+    assert "  - id: pr" in rendered
+    assert "  - id: review" in rendered
+    assert "github_write" in rendered
+    assert "linear_write" in rendered
 
 
 def test_write_workflow_template_rejects_existing_unless_forced(tmp_path: Path) -> None:

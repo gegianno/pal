@@ -24,7 +24,7 @@ _MAX_TOKEN_LENGTH = 80
 
 _DEV_COMPLEX = WorkflowTemplate(
     name="dev-complex",
-    description="Six-phase development workflow with specialist agents, gates, and replan loops.",
+    description="Six-phase development workflow with specialist agents, PR gates, and replan loops.",
     mode="complex",
     body="""
 version: 1
@@ -86,6 +86,7 @@ phases:
     policy: co-driver
     required_artifacts:
       - artifacts/implementation.md
+      - artifacts/integration.md
     transitions:
       - on: complete
         to: verify
@@ -104,7 +105,7 @@ phases:
         role: integration and compatibility guard
         prompt: Check interfaces, migrations, cross-repo contracts, and backwards compatibility.
         produces:
-          - artifacts/implementation.md
+          - artifacts/integration.md
         requires:
           - local_headless
           - json_output
@@ -112,15 +113,16 @@ phases:
     policy: supervisor
     required_artifacts:
       - artifacts/verification.md
+      - artifacts/regression.md
     transitions:
       - on: complete
-        to: review
+        to: pr
       - on: blocked
         to: implement
     agents:
       - id: test-runner
         role: validation and test execution specialist
-        prompt: Run targeted and full validation, capture exact commands, failures, and fixes.
+        prompt: Run targeted and full validation, capture exact commands, failures, and fixes. Set verification JSON status to passed, blocked, or failed.
         produces:
           - artifacts/verification.md
         requires:
@@ -130,60 +132,74 @@ phases:
         role: regression, edge-case, and coverage analyst
         prompt: Look for untested branches, behavioral regressions, and missing validation evidence.
         produces:
-          - artifacts/verification.md
+          - artifacts/regression.md
         requires:
           - local_headless
           - json_output
-  - id: review
-    policy: observer
+  - id: pr
+    policy: supervisor
+    requires_approval: true
     required_artifacts:
-      - artifacts/review.md
+      - artifacts/pr.md
     transitions:
       - on: complete
-        to: ship
+        to: review
+      - on: blocked
+        to: implement
+    agents:
+      - id: pr-manager
+        role: draft PR creation and update specialist
+        prompt: Use your native GitHub tools or gh CLI to create or update the draft PR for the verified implementation. Link the PR to Linear if an issue is provided or discoverable through your native tools. Record branch, commit, push status, PR URL, Linear links, review-readiness notes, and any blocker. You may use pal flow pr as a deterministic fallback, but pal does not own connector auth or remote side effects for this phase.
+        produces:
+          - artifacts/pr.md
+        requires:
+          - local_headless
+          - json_output
+        tools:
+          required:
+            - github_write
+          optional:
+            - linear_write
+  - id: review
+    policy: supervisor
+    required_artifacts:
+      - artifacts/review.md
+      - artifacts/docs-review.md
+    transitions:
       - on: blocked
         to: implement
     agents:
       - id: code-reviewer
         role: reviewer focused on defects and maintainability
-        prompt: Review the diff for correctness bugs, regressions, security issues, and test gaps.
+        prompt: Review the diff and draft PR for correctness bugs, regressions, security issues, and test gaps. Use native GitHub and Linear tools when available to inspect PR context, issue requirements, and review comments. If changes are needed, return blocked so implementation can continue and the draft PR can be updated after verification.
         produces:
           - artifacts/review.md
         requires:
           - local_headless
           - json_output
+        tools:
+          optional:
+            - github_read
+            - linear_read
       - id: docs-reviewer
         role: docs, changelog, and operator-readiness reviewer
-        prompt: Check docs, upgrade notes, operational implications, and handoff clarity.
+        prompt: Check docs, upgrade notes, operational implications, handoff clarity, and any Linear/GitHub context available through native tools.
         produces:
-          - artifacts/review.md
+          - artifacts/docs-review.md
         requires:
           - local_headless
           - json_output
-  - id: ship
-    policy: supervisor
-    requires_approval: true
-    required_artifacts:
-      - artifacts/ship.md
-    transitions:
-      - on: blocked
-        to: verify
-    agents:
-      - id: shipper
-        role: PR and release-readiness specialist
-        prompt: Prepare the final PR summary, validation evidence, residual risks, and next steps.
-        produces:
-          - artifacts/ship.md
-        requires:
-          - local_headless
-          - json_output
+        tools:
+          optional:
+            - github_read
+            - linear_read
 """,
 )
 
 
 _DEV_ROUTINE = WorkflowTemplate(
     name="dev-routine",
-    description="Three-phase development workflow for small safe changes.",
+    description="Four-phase development workflow for small safe changes with PR and review gates.",
     mode="routine",
     body="""
 version: 1
@@ -219,35 +235,62 @@ phases:
       - artifacts/verification.md
     transitions:
       - on: complete
-        to: ship
+        to: pr
       - on: blocked
         to: implement
     agents:
       - id: verifier
         role: validation specialist
-        prompt: Run the relevant validation commands and capture exact evidence.
+        prompt: Run the relevant validation commands and capture exact evidence. Set verification JSON status to passed, blocked, or failed.
         produces:
           - artifacts/verification.md
         requires:
           - local_headless
           - json_output
-  - id: ship
+  - id: pr
     policy: supervisor
     requires_approval: true
     required_artifacts:
-      - artifacts/ship.md
+      - artifacts/pr.md
     transitions:
+      - on: complete
+        to: review
       - on: blocked
-        to: verify
+        to: implement
     agents:
-      - id: shipper
-        role: PR readiness specialist
-        prompt: Summarize the completed change, validation, risks, and next steps.
+      - id: pr-manager
+        role: draft PR creation and update specialist
+        prompt: Use your native GitHub tools or gh CLI to create or update the draft PR for the verified implementation. Link the PR to Linear if an issue is provided or discoverable through your native tools. Record branch, commit, push status, PR URL, Linear links, review-readiness notes, and any blocker. You may use pal flow pr as a deterministic fallback, but pal does not own connector auth or remote side effects for this phase.
         produces:
-          - artifacts/ship.md
+          - artifacts/pr.md
         requires:
           - local_headless
           - json_output
+        tools:
+          required:
+            - github_write
+          optional:
+            - linear_write
+  - id: review
+    policy: supervisor
+    required_artifacts:
+      - artifacts/review.md
+    transitions:
+      - on: blocked
+        to: implement
+    agents:
+      - id: reviewer
+        role: reviewer focused on defects, regressions, and PR readiness
+        prompt: Review the implementation and draft PR for correctness, regressions, missing tests, and release blockers. Use native GitHub and Linear tools when available to inspect PR context, issue requirements, and review comments. If changes are needed, return blocked so implementation can continue and the draft PR can be updated after verification.
+        produces:
+          - artifacts/review.md
+        requires:
+          - local_headless
+          - json_output
+        tools:
+          optional:
+            - github_read
+            - linear_read
 """,
 )
 

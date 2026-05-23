@@ -12,6 +12,7 @@ from rich.table import Table
 
 from ..cli_config import cfg_from_options
 from .models import FlowPhase, FlowRun
+from .providers.base import PROVIDER_STATE_ERROR
 from .runtime import build_local_flow_service
 from .workflows.library import WorkflowSpecError
 from .workflows.templates import (
@@ -72,6 +73,38 @@ def _change_or_error(service, method: str, *args, **kwargs):  # noqa: ANN001, AN
         return getattr(service, method)(*args, **kwargs)
     except (FileNotFoundError, ValueError, WorkflowSpecError) as exc:
         raise typer.BadParameter(str(exc)) from exc
+
+
+def _failed_execution_lines(summary) -> list[str]:  # noqa: ANN001
+    lines = ["phase execution failed"]
+    for execution in summary.executions:
+        if execution.status == "completed" and execution.returncode == 0:
+            continue
+        provider = execution.target.provider
+        agent = execution.target.agent_id
+        error = str(execution.diagnostics.get("error", "")).strip()
+        if error == PROVIDER_STATE_ERROR:
+            lines.append(
+                f"{provider}/{agent}: provider state is not accessible. "
+                "Run pal from a process that can access the provider CLI's logged-in state "
+                "directory, or grant that directory to the outer sandbox."
+            )
+        elif error:
+            lines.append(f"{provider}/{agent}: {error}")
+        else:
+            lines.append(f"{provider}/{agent}: returncode {execution.returncode}")
+        stderr_path = execution.paths.get("stderr", "")
+        if stderr_path:
+            lines.append(f"stderr: {stderr_path}")
+    return lines
+
+
+def _failed_run_lines(summary) -> list[str]:  # noqa: ANN001
+    lines = ["flow run failed"]
+    for step in summary.steps:
+        if step.execution and step.execution.status != "completed":
+            lines.extend(_failed_execution_lines(step.execution))
+    return lines
 
 
 def _write_workflow_template_or_error(
@@ -160,8 +193,19 @@ def _read_body_file(path: Path | None) -> str:
         raise typer.BadParameter(f"Cannot read body file '{path}': {exc}") from exc
 
 
-def _print_ship_summary(summary) -> None:  # noqa: ANN001
-    table = Table(title=f"Flow ship: {summary.feature}", header_style="bold")
+def _resolve_request(request: str, request_file: Path | None) -> str:
+    if request.strip() and request_file:
+        raise typer.BadParameter("Use either --request or --request-file, not both.")
+    if not request_file:
+        return request
+    try:
+        return request_file.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise typer.BadParameter(f"Cannot read request file '{request_file}': {exc}") from exc
+
+
+def _print_pr_summary(summary) -> None:  # noqa: ANN001
+    table = Table(title=f"Flow PR: {summary.feature}", header_style="bold")
     table.add_column("Repo")
     table.add_column("Changed")
     table.add_column("Commit")
@@ -325,6 +369,12 @@ def flow_start(
     ),
     headless: bool = typer.Option(False, "--headless", help="Run provider in local headless mode."),
     prompt: str = typer.Option("", "--prompt", help="Prompt for explicit headless provider runs."),
+    request: str = typer.Option("", "--request", help="User request to include in phase briefs."),
+    request_file: Optional[Path] = typer.Option(
+        None,
+        "--request-file",
+        help="Read the user request from a Markdown/text file.",
+    ),
     root: Path = typer.Option(Path("."), "--root", "-r"),
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
     branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
@@ -344,6 +394,7 @@ def flow_start(
         provider_name=provider,
         headless=headless,
         prompt=prompt,
+        request=_resolve_request(request, request_file),
         workflow=workflow,
         workspace_mode=workspace,
         copy_local=copy_local,
@@ -386,6 +437,13 @@ def flow_status(
         table.add_row("blocked_reason", run.blocked_reason)
     if run.approvals:
         table.add_row("approvals", ", ".join(sorted(run.approvals)))
+    if run.approval_reasons:
+        table.add_row(
+            "approval_reasons",
+            "; ".join(
+                f"{phase}: {reason}" for phase, reason in sorted(run.approval_reasons.items())
+            ),
+        )
     table.add_row("phase_history", str(len(run.phase_history)))
     table.add_row("repos", ", ".join(run.repos) if run.repos else "(none)")
     table.add_row("artifact_root", run.artifact_root)
@@ -533,10 +591,17 @@ def flow_execute(
             title="pal flow executed",
         )
     )
+    if summary.status != "completed":
+        console.print(
+            Panel.fit(
+                "\n".join(_failed_execution_lines(summary)), title="pal flow execution failed"
+            )
+        )
+        raise typer.Exit(code=1)
 
 
-@flow_app.command("ship")
-def flow_ship(
+@flow_app.command("pr")
+def flow_pr(
     feature: str = typer.Argument(..., help="Feature workspace name."),
     repos: Optional[List[str]] = typer.Option(
         None,
@@ -563,11 +628,11 @@ def flow_ship(
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
     branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
 ) -> None:
-    """Prepare shipping artifacts and optionally commit, push, and create PRs."""
+    """Prepare PR artifacts and optionally commit, push, and create PRs."""
     service = _service_from_options(root, worktree_root, branch_prefix)
     summary = _change_or_error(
         service,
-        "ship",
+        "pr",
         feature,
         run_id=run_id,
         repos=list(repos or []),
@@ -581,7 +646,7 @@ def flow_ship(
         create_pr=create_pr,
         draft=draft,
     )
-    _print_ship_summary(summary)
+    _print_pr_summary(summary)
     if summary.status != "completed":
         raise typer.Exit(1)
 
@@ -652,12 +717,20 @@ def flow_run(
         f"steps: {len(summary.steps)}",
     ]
     console.print(Panel.fit("\n".join(lines), title="pal flow run"))
+    if summary.status == "failed":
+        console.print(Panel.fit("\n".join(_failed_run_lines(summary)), title="pal flow run failed"))
+        raise typer.Exit(code=1)
 
 
 @flow_app.command("approve")
 def flow_approve(
     feature: str = typer.Argument(..., help="Feature workspace name."),
     phase: Optional[str] = typer.Option(None, "--phase", help="Phase to approve."),
+    reason: str = typer.Option(
+        "",
+        "--reason",
+        help="Approval reason. Required for verification blocked approvals.",
+    ),
     run_id: Optional[str] = typer.Option(None, "--run-id", help="Run ID. Defaults to latest."),
     root: Path = typer.Option(Path("."), "--root", "-r"),
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
@@ -671,6 +744,7 @@ def flow_approve(
         feature,
         run_id=run_id,
         phase=_parse_phase(phase) if phase else None,
+        reason=reason,
     )
     console.print(
         Panel.fit(
