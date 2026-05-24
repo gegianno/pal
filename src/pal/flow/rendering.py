@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import shlex
 from typing import Any
 
 from .artifacts import resolve_artifact_path
@@ -42,6 +43,7 @@ class PhaseBrief:
     events: list[FlowEvent]
     provider_guidance: dict[str, str]
     rendered_at: str
+    pal_command: str = "pal"
     paths: dict[str, str] = field(default_factory=dict)
 
     def with_paths(self, paths: dict[str, str]) -> PhaseBrief:
@@ -55,12 +57,14 @@ class PhaseBrief:
             events=self.events,
             provider_guidance=self.provider_guidance,
             rendered_at=self.rendered_at,
+            pal_command=self.pal_command,
             paths=dict(paths),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "rendered_at": self.rendered_at,
+            "pal_command": self.pal_command,
             "run": {
                 "run_id": self.run.run_id,
                 "feature": self.run.feature,
@@ -107,6 +111,7 @@ class PhaseBrief:
             f"- Work type: `{self.run.work_type or 'none'}`",
             f"- Repos: `{', '.join(self.run.repos) if self.run.repos else 'none'}`",
             f"- Artifact root: `{self.run.artifact_root}`",
+            f"- Pal command: `{_shell_command(self.pal_command)}`",
             "",
             "## Artifact Path Rules",
             "",
@@ -166,7 +171,14 @@ class PhaseBrief:
             "",
             "- Treat this brief as the source of truth for the current phase.",
             "- Produce the required artifacts before advancing the phase.",
-            "- If blocked, record the blocker with `pal flow block` instead of hiding it in output.",
+            (
+                f"- If blocked, record the blocker with "
+                f"`{_shell_command(self.pal_command)} flow block` instead of hiding it in output."
+            ),
+            (
+                f"- When invoking pal from this phase, use "
+                f"`{_shell_command(self.pal_command)}` rather than another `pal` binary on PATH."
+            ),
         ]
         return "\n".join(lines) + "\n"
 
@@ -179,6 +191,7 @@ def build_phase_brief(
     rendered_at: str,
     default_provider: str,
     provider_filter: str = "",
+    pal_command: str = "pal",
 ) -> PhaseBrief:
     workflow_phase = workflow.phase(run.current_phase) if workflow else None
     policy = _phase_policy(run, workflow_phase)
@@ -199,6 +212,7 @@ def build_phase_brief(
         events=events,
         provider_guidance={provider: provider_guidance(provider) for provider in providers},
         rendered_at=rendered_at,
+        pal_command=pal_command.strip() or "pal",
     )
 
 
@@ -322,6 +336,10 @@ def _approval_reasons_text(reasons: dict[str, str]) -> str:
     if not reasons:
         return "none"
     return "; ".join(f"{phase}: {reason}" for phase, reason in sorted(reasons.items()))
+
+
+def _shell_command(command: str) -> str:
+    return shlex.quote(command.strip() or "pal")
 
 
 def _agent_lines(run: FlowRun, agents: list[ResolvedPhaseAgent]) -> list[str]:

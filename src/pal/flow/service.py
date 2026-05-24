@@ -83,6 +83,7 @@ class LocalFlowService:
         pr_manager: FlowPrManager | None = None,
         clock: Callable[[], str] = utc_now,
         id_factory: Callable[[str], str] = new_id,
+        pal_command: str = "pal",
     ) -> None:
         self.store = store
         self.providers = dict(providers)
@@ -93,6 +94,7 @@ class LocalFlowService:
         self.pr_manager = pr_manager or FlowPrManager()
         self.clock = clock
         self.id_factory = id_factory
+        self.pal_command = pal_command.strip() or "pal"
 
     def provider_names(self) -> list[str]:
         return sorted(self.providers)
@@ -405,6 +407,7 @@ class LocalFlowService:
             rendered_at=self.clock(),
             default_provider=self.default_provider,
             provider_filter=provider_name,
+            pal_command=self.pal_command,
         )
         paths = self.store.write_phase_brief(
             run,

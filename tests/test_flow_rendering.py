@@ -98,6 +98,7 @@ def test_build_phase_brief_resolves_agents_guidance_and_serializes() -> None:
         events=[_event(), phase_less_event],
         rendered_at="2026-04-27T00:01:00Z",
         default_provider="fake",
+        pal_command="/tmp/pal current",
     ).with_paths({"markdown": "/tmp/brief.md", "json": "/tmp/brief.json"})
 
     data = brief.to_dict()
@@ -105,6 +106,7 @@ def test_build_phase_brief_resolves_agents_guidance_and_serializes() -> None:
     expected_artifact_path = Path("/tmp/feat/.pal/artifacts/design.md").resolve()
 
     assert data["rendered_at"] == "2026-04-27T00:01:00Z"
+    assert data["pal_command"] == "/tmp/pal current"
     assert data["phase"]["id"] == "design"
     assert data["phase"]["policy"] == "co-driver"
     assert data["phase"]["requires_approval"] is True
@@ -132,6 +134,9 @@ def test_build_phase_brief_resolves_agents_guidance_and_serializes() -> None:
     assert "Optional tools: linear_write" in markdown
     assert f"`artifacts/design.md` -> `{expected_artifact_path}`" in markdown
     assert "Approval reasons: `design: Accepted manual verification.`" in markdown
+    assert "Pal command: `'/tmp/pal current'`" in markdown
+    assert "`'/tmp/pal current' flow block`" in markdown
+    assert "rather than another `pal` binary on PATH" in markdown
     assert "/tmp/feat/.pal/artifacts" in markdown
 
 

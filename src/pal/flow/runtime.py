@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+import shutil
+import sys
+
 from .providers.claude import ClaudeFlowProvider
 from .providers.codex import CodexFlowProvider
 from .providers.fake import FakeFlowProvider
@@ -27,4 +31,16 @@ def build_local_flow_service(cfg) -> LocalFlowService:  # noqa: ANN001
                 for hook in cfg.flow.hooks
             ]
         ),
+        pal_command=detect_pal_command(),
     )
+
+
+def detect_pal_command(argv0: str | None = None) -> str:
+    command = (argv0 if argv0 is not None else sys.argv[0]).strip()
+    if not command:
+        return "pal"
+    path = Path(command).expanduser()
+    if path.is_absolute() and path.exists():
+        return str(path.resolve())
+    resolved = shutil.which(command)
+    return resolved or command
