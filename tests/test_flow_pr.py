@@ -208,6 +208,8 @@ def test_flow_pr_manager_commits_pushes_and_reuses_existing_pr(tmp_path: Path) -
     assert summary.repos[0].push_status == "pushed"
     assert summary.repos[0].pr_status == "existing"
     assert summary.repos[0].pr_url == "https://example.test/pr/old"
+    view_call = [call[0] for call in runner.calls if call[0][:3] == ["gh", "pr", "view"]][0]
+    assert view_call == ["gh", "pr", "view", "feat/test", "--json", "url", "--jq", ".url"]
     assert not any(call[0][:3] == ["gh", "pr", "create"] for call in runner.calls)
 
 

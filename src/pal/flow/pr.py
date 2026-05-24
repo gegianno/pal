@@ -278,7 +278,7 @@ class FlowPrManager:
         if dry_run:
             return replace(repo, pr_status="would_create")
         existing = self._run(
-            ["gh", "pr", "view", "--head", repo.branch, "--json", "url", "--jq", ".url"],
+            ["gh", "pr", "view", repo.branch, "--json", "url", "--jq", ".url"],
             cwd=repo_path,
         )
         if existing.returncode == 0 and existing.stdout.strip():
