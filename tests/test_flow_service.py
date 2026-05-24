@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import pal.flow.service as service_module
 from pal.flow.hooks import FlowHook, FlowHookDispatcher, HookCommandResult
 from pal.flow.models import FlowPhase, FlowRun, FlowStatus
 from pal.flow.providers.base import ProviderLaunchRequest, ProviderLaunchResult
@@ -33,6 +34,15 @@ class FailingFlowProvider(FakeFlowProvider):
             stdout="",
             stderr="failed\n",
         )
+
+
+class RecordingFlowProvider(FakeFlowProvider):
+    def __init__(self) -> None:
+        self.requests: list[ProviderLaunchRequest] = []
+
+    def launch_headless(self, request: ProviderLaunchRequest) -> ProviderLaunchResult:
+        self.requests.append(request)
+        return super().launch_headless(request)
 
 
 class RecordingHookRunner:
@@ -1020,6 +1030,48 @@ def test_flow_service_execute_phase_runs_rendered_agents_and_records_artifacts(
         "flow.phase.execution.started",
         "flow.phase.execution.completed",
     ]
+
+
+def test_flow_service_passes_repo_git_metadata_dirs_to_phase_providers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ids = [
+        "run_exec",
+        "evt_started",
+        "evt_provider",
+        "evt_rendered",
+        "evt_execution_started",
+        "exec_designer",
+        "evt_execution_completed",
+    ]
+    store = LocalFlowStore(tmp_path / "_wt")
+    provider = RecordingFlowProvider()
+    metadata_dir = tmp_path / "llamadapro" / ".git" / "worktrees" / "feat"
+    common_dir = tmp_path / "llamadapro" / ".git"
+    _write_workflow(
+        tmp_path,
+        "dev-complex",
+        _workflow_body(design_required_artifact=True),
+    )
+    monkeypatch.setattr(
+        service_module,
+        "git_metadata_dirs",
+        lambda _repo_path: [metadata_dir, common_dir, metadata_dir],
+    )
+    service = LocalFlowService(
+        store=store,
+        providers={"fake": provider},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+        clock=lambda: "2026-04-27T00:00:00Z",
+        id_factory=lambda _prefix: ids.pop(0),
+    )
+    service.start(feature="feat", repos=["api"], workflow="dev-complex")
+    (store.feature_dir("feat") / "api").mkdir(parents=True)
+
+    service.execute_phase("feat")
+
+    assert provider.requests[0].writable_dirs == [metadata_dir, common_dir]
 
 
 def test_flow_service_execute_phase_supports_synthetic_provider_and_agent_filter(

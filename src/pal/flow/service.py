@@ -4,7 +4,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Mapping
 
-from ..identifiers import normalize_feature_name, normalize_repo_name
+from ..git import git_metadata_dirs
+from ..identifiers import normalize_feature_name, normalize_repo_name, safe_child_path
 from ..workspaces import (
     STATE_ONLY_WORKSPACE_MODE,
     WorkspaceBackend,
@@ -274,6 +275,7 @@ class LocalFlowService:
                     workspace_dir=self.store.feature_dir(feature_name),
                     prompt=prompt,
                     output_dir=self.store.latest_output_dir(feature_name, run.run_id),
+                    writable_dirs=self._provider_writable_dirs(run),
                 )
             )
             launch_ended_at = self.clock()
@@ -481,6 +483,7 @@ class LocalFlowService:
                     workspace_dir=self.store.feature_dir(run.feature),
                     prompt=prompt,
                     output_dir=execution_dir,
+                    writable_dirs=self._provider_writable_dirs(run),
                 )
             )
             ended_at = self.clock()
@@ -1013,6 +1016,19 @@ class LocalFlowService:
 
     def _normalize_repos(self, repos: list[str]) -> list[str]:
         return list(dict.fromkeys(normalize_repo_name(repo) for repo in repos))
+
+    def _provider_writable_dirs(self, run: FlowRun) -> list[Path]:
+        feature_dir = self.store.feature_dir(run.feature)
+        dirs: list[Path] = []
+        for repo in run.repos:
+            repo_path = safe_child_path(
+                feature_dir,
+                normalize_repo_name(repo),
+                "Repo name",
+            )
+            if repo_path.exists():
+                dirs.extend(git_metadata_dirs(repo_path))
+        return list(dict.fromkeys(dirs))
 
     def _ensure_workflow_phase(
         self,

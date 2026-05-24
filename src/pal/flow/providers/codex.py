@@ -108,7 +108,12 @@ class CodexFlowProvider:
             payload={"feature": run.feature, "mode": run.mode, "repos": list(run.repos)},
         )
 
-    def headless_command(self, workspace_dir: Path, _prompt: str) -> list[str]:
+    def headless_command(
+        self,
+        workspace_dir: Path,
+        _prompt: str,
+        writable_dirs: list[Path] | None = None,
+    ) -> list[str]:
         executable = self.runner.which("codex") or "codex"
         command = [executable]
         headless_approval = self.codex.headless_approval.strip()
@@ -123,7 +128,7 @@ class CodexFlowProvider:
             command.append("--full-auto")
         else:
             command += ["--sandbox", self.codex.sandbox]
-        for raw_dir in self._effective_add_dirs():
+        for raw_dir in [*self._effective_add_dirs(), *(str(path) for path in writable_dirs or [])]:
             normalized = _normalize_add_dir(workspace_dir, raw_dir)
             if normalized:
                 command += ["--add-dir", normalized]
@@ -135,7 +140,11 @@ class CodexFlowProvider:
         return command
 
     def launch_headless(self, request: ProviderLaunchRequest) -> ProviderLaunchResult:
-        command = self.headless_command(request.workspace_dir, request.prompt)
+        command = self.headless_command(
+            request.workspace_dir,
+            request.prompt,
+            request.writable_dirs,
+        )
         if not self.runner.which("codex"):
             return ProviderLaunchResult(
                 provider=self.name,
@@ -203,5 +212,6 @@ def _launch_diagnostics(
         "prompt_chars": len(request.prompt),
         "prompt_transport": "stdin",
         "headless_ephemeral": headless_ephemeral,
+        "writable_dirs": [str(path) for path in request.writable_dirs],
         "error": error,
     }

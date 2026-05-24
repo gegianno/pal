@@ -148,6 +148,7 @@ class ProviderLaunchRequest:
     workspace_dir: Path
     prompt: str
     output_dir: Path
+    writable_dirs: list[Path] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

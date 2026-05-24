@@ -71,6 +71,8 @@ def test_claude_preflight_missing_cli() -> None:
 
 def test_claude_start_and_headless_launch(tmp_path: Path) -> None:
     runner = FakeRunner()
+    git_metadata_dir = tmp_path / ".git" / "worktrees" / "repo"
+    git_metadata_dir.mkdir(parents=True)
     provider = ClaudeFlowProvider(
         runner,
         claude=ClaudeConfig(
@@ -88,6 +90,7 @@ def test_claude_start_and_headless_launch(tmp_path: Path) -> None:
             workspace_dir=tmp_path,
             prompt="Summarize",
             output_dir=tmp_path / ".pal" / "runs" / "run_1" / "latest",
+            writable_dirs=[git_metadata_dir],
         )
     )
 
@@ -99,6 +102,8 @@ def test_claude_start_and_headless_launch(tmp_path: Path) -> None:
         str(Path("/tmp/shared").resolve()),
         "--add-dir",
         str((tmp_path / "cache").resolve()),
+        "--add-dir",
+        str(git_metadata_dir.resolve()),
         "-p",
         "--verbose",
         "--model",
@@ -115,6 +120,7 @@ def test_claude_start_and_headless_launch(tmp_path: Path) -> None:
     assert launch.diagnostics["executable"] == "/bin/claude"
     assert launch.diagnostics["prompt_chars"] == len("Summarize")
     assert launch.diagnostics["prompt_transport"] == "stdin"
+    assert launch.diagnostics["writable_dirs"] == [str(git_metadata_dir)]
     assert launch.diagnostics["error"] == ""
 
 

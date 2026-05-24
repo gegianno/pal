@@ -120,6 +120,8 @@ def test_codex_preflight_reports_inaccessible_provider_state() -> None:
 
 def test_codex_start_and_headless_launch(tmp_path: Path) -> None:
     runner = FakeRunner()
+    git_metadata_dir = tmp_path / ".git" / "worktrees" / "repo"
+    git_metadata_dir.mkdir(parents=True)
     provider = CodexFlowProvider(
         runner,
         codex=CodexConfig(sandbox="workspace-write", add_dirs=["cache", ""]),
@@ -132,6 +134,7 @@ def test_codex_start_and_headless_launch(tmp_path: Path) -> None:
             workspace_dir=tmp_path,
             prompt="Summarize",
             output_dir=tmp_path / ".pal" / "runs" / "run_1" / "latest",
+            writable_dirs=[git_metadata_dir],
         )
     )
 
@@ -151,6 +154,8 @@ def test_codex_start_and_headless_launch(tmp_path: Path) -> None:
         str(Path("/tmp/shared").resolve()),
         "--add-dir",
         str((tmp_path / "cache").resolve()),
+        "--add-dir",
+        str(git_metadata_dir.resolve()),
         "--skip-git-repo-check",
         "--json",
         "-",
@@ -161,6 +166,7 @@ def test_codex_start_and_headless_launch(tmp_path: Path) -> None:
     assert launch.diagnostics["prompt_chars"] == len("Summarize")
     assert launch.diagnostics["prompt_transport"] == "stdin"
     assert launch.diagnostics["headless_ephemeral"] is True
+    assert launch.diagnostics["writable_dirs"] == [str(git_metadata_dir)]
     assert launch.diagnostics["error"] == ""
 
 

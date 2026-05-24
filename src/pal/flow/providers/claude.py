@@ -83,7 +83,12 @@ class ClaudeFlowProvider:
             payload={"feature": run.feature, "mode": run.mode, "repos": list(run.repos)},
         )
 
-    def headless_command(self, workspace_dir: Path, _prompt: str) -> list[str]:
+    def headless_command(
+        self,
+        workspace_dir: Path,
+        _prompt: str,
+        writable_dirs: list[Path] | None = None,
+    ) -> list[str]:
         executable = self.runner.which("claude") or "claude"
         args = list(self.claude.extra_args)
         if self.claude.model and not _has_flag(args, "--model"):
@@ -99,7 +104,7 @@ class ClaudeFlowProvider:
         _validate_permissions(self.claude, args)
 
         command = [executable]
-        for raw_dir in self._effective_add_dirs():
+        for raw_dir in [*self._effective_add_dirs(), *(str(path) for path in writable_dirs or [])]:
             normalized = _normalize_add_dir(workspace_dir, raw_dir)
             if normalized:
                 command += ["--add-dir", normalized]
@@ -110,7 +115,11 @@ class ClaudeFlowProvider:
         return command
 
     def launch_headless(self, request: ProviderLaunchRequest) -> ProviderLaunchResult:
-        command = self.headless_command(request.workspace_dir, request.prompt)
+        command = self.headless_command(
+            request.workspace_dir,
+            request.prompt,
+            request.writable_dirs,
+        )
         if not self.runner.which("claude"):
             return ProviderLaunchResult(
                 provider=self.name,
@@ -201,5 +210,6 @@ def _launch_diagnostics(
         "output_dir": str(request.output_dir),
         "prompt_chars": len(request.prompt),
         "prompt_transport": "stdin",
+        "writable_dirs": [str(path) for path in request.writable_dirs],
         "error": error,
     }
