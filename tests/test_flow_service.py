@@ -660,6 +660,7 @@ def test_flow_service_pr_writes_body_manifest_and_event(tmp_path: Path) -> None:
 
     body_path = store.pr_dir("feat", run.run_id) / "body.md"
     manifest_path = store.pr_dir("feat", run.run_id) / "manifest.json"
+    artifact_path = Path(run.artifact_root) / "pr.md"
     assert summary.status == "completed"
     assert pr_manager.calls[0]["repos"] == ["api"]
     assert pr_manager.calls[0]["feature_dir"] == store.feature_dir("feat")
@@ -667,7 +668,14 @@ def test_flow_service_pr_writes_body_manifest_and_event(tmp_path: Path) -> None:
     assert pr_manager.calls[0]["title"] == "feat: complex"
     assert body_path.read_text(encoding="utf-8") == "custom body\n"
     assert manifest_path.is_file()
-    assert summary.paths == {"body": str(body_path), "manifest": str(manifest_path)}
+    assert artifact_path.is_file()
+    assert summary.paths == {
+        "artifact": str(artifact_path),
+        "body": str(body_path),
+        "manifest": str(manifest_path),
+    }
+    assert store.read_run_json("feat", run.run_id, "pr/manifest.json")["paths"] == summary.paths
+    assert "## Summary" in artifact_path.read_text(encoding="utf-8")
     assert service.events("feat")[-1].type == "flow.pr.completed"
 
 
@@ -690,6 +698,7 @@ def test_flow_service_pr_uses_default_body_and_reports_failures(tmp_path: Path) 
     assert "Workflow: `dev-complex`" in body
     assert "Work type: `dev`" in body
     assert "Repos: `api`" in body
+    assert (Path(run.artifact_root) / "pr.md").is_file()
     assert pr_manager.calls[0]["base"] == "main"
     assert service.events("feat")[-1].type == "flow.pr.failed"
 

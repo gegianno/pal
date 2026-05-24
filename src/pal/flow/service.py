@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 from pathlib import Path
 from typing import Callable, Mapping
 
@@ -16,6 +17,7 @@ from .artifacts import (
     ArtifactValidation,
     VerificationOutcome,
     VerificationStatus,
+    resolve_artifact_path,
     validate_artifact_reference,
     validate_required_artifacts,
     is_verification_artifact,
@@ -364,6 +366,8 @@ class LocalFlowService:
         )
         manifest_path = self.store.pr_dir(run.feature, run.run_id) / "manifest.json"
         summary = summary.with_paths({"body": body_path, "manifest": str(manifest_path)})
+        artifact_path = self._write_pr_phase_artifact(run, summary)
+        summary = summary.with_paths({"artifact": str(artifact_path)})
         self.store.write_pr_manifest(run, summary.to_dict())
         self._append_event(
             run,
@@ -1017,6 +1021,12 @@ class LocalFlowService:
     def _normalize_repos(self, repos: list[str]) -> list[str]:
         return list(dict.fromkeys(normalize_repo_name(repo) for repo in repos))
 
+    def _write_pr_phase_artifact(self, run: FlowRun, summary: FlowPrSummary) -> Path:
+        path = resolve_artifact_path(run, self.store.feature_dir(run.feature), "artifacts/pr.md")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(_pr_phase_artifact_markdown(summary), encoding="utf-8")
+        return path
+
     def _provider_writable_dirs(self, run: FlowRun) -> list[Path]:
         feature_dir = self.store.feature_dir(run.feature)
         dirs: list[Path] = []
@@ -1184,3 +1194,35 @@ class LocalFlowService:
         )
         self.store.append_event(run.feature, run.run_id, event)
         self.hooks.dispatch(event=event, run=run, store=self.store)
+
+
+def _pr_phase_artifact_markdown(summary: FlowPrSummary) -> str:
+    urls = [repo.pr_url for repo in summary.repos if repo.pr_url]
+    lines = [
+        "# PR Phase",
+        "",
+        "```json",
+        json.dumps(summary.to_dict(), indent=2, sort_keys=True),
+        "```",
+        "",
+        "## Summary",
+        "",
+        f"- Status: `{summary.status}`",
+        f"- Branches: {', '.join(f'`{repo.branch}`' for repo in summary.repos) or '`none`'}",
+        f"- PR URLs: {', '.join(urls) if urls else '`none`'}",
+        "",
+        "## Repos",
+        "",
+    ]
+    for repo in summary.repos:
+        lines.extend(
+            [
+                f"- `{repo.repo}`",
+                f"  - Commit: `{repo.commit_status}`",
+                f"  - Push: `{repo.push_status}`",
+                f"  - PR: `{repo.pr_status}`",
+                f"  - URL: `{repo.pr_url or 'none'}`",
+                f"  - Error: `{repo.error or 'none'}`",
+            ]
+        )
+    return "\n".join(lines) + "\n"
