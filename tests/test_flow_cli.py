@@ -338,7 +338,8 @@ def test_flow_start_rejects_conflicting_request_sources(tmp_path: Path) -> None:
     )
 
     assert result.exit_code != 0
-    assert "Use either --request or --request-file" in result.output
+    with pytest.raises(typer.BadParameter, match="Use either --request or --request-file"):
+        flow_cli._resolve_request("inline request", request_file)
 
 
 def test_flow_start_reports_unreadable_request_file(tmp_path: Path) -> None:
