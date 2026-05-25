@@ -1314,7 +1314,7 @@ def _artifact_summary_lines(
         section = _markdown_section(markdown, heading)
         if section:
             sections.append(section)
-    content = "\n\n".join(dict.fromkeys(sections))
+    content = _strip_json_blocks("\n\n".join(dict.fromkeys(sections))).strip()
     if not content:
         content = _first_nonempty_paragraph(_strip_json_blocks(markdown))
     if not content:
@@ -1366,7 +1366,10 @@ def _truncate_markdown(text: str, limit: int) -> str:
     stripped = text.strip()
     if len(stripped) <= limit:
         return stripped
-    return stripped[: limit - 22].rstrip() + "\n\n...truncated for PR body"
+    truncated = stripped[: limit - 22].rstrip()
+    if truncated.count("```") % 2:
+        truncated += "\n```"
+    return truncated + "\n\n...truncated for PR body"
 
 
 def _verification_status_from_markdown(markdown: str) -> str:

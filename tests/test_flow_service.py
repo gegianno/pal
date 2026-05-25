@@ -797,12 +797,22 @@ def test_pr_body_helpers_handle_missing_fallbacks_and_status_variants() -> None:
         '# Notes\n\n```json\n{"ignored": true}\n```\n\nUseful paragraph.',
         preferred_sections=["Missing"],
     ) == ["Useful paragraph."]
+    assert service_module._artifact_summary_lines(
+        '## Summary\n\nNo code findings.\n\n```json\n{"status": "approved"}\n```',
+        preferred_sections=["Summary"],
+    ) == ["No code findings."]
     assert (
         service_module._artifact_summary_lines(
             "## Summary\n\n" + ("x" * 1700),
             preferred_sections=["Summary"],
         )[-1]
         == "...truncated for PR body"
+    )
+    assert "```\n\n...truncated" in "\n".join(
+        service_module._artifact_summary_lines(
+            "## Summary\n\n```text\n" + ("x" * 1700),
+            preferred_sections=["Summary"],
+        )
     )
     assert service_module._artifact_summary_lines(
         '```json\n{"ignored": true}\n```',
