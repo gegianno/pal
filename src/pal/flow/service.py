@@ -1485,16 +1485,7 @@ def _latest_evidence_by_check(
 
 def _evidence_requirements_from_payload(payload: dict[str, object]) -> list[EvidenceRequirement]:
     raw_items = payload.get("required_evidence", payload.get("blocked_checks", []))
-    requirements = _requirements_from_items(raw_items)
-    if requirements:
-        return requirements
-    checks = payload.get("checks", [])
-    blocked_checks = [
-        check
-        for check in checks
-        if isinstance(check, dict) and str(check.get("status", "")).strip() == "blocked"
-    ]
-    return _requirements_from_items(blocked_checks)
+    return _requirements_from_items(raw_items)
 
 
 def _requirements_from_items(items: object) -> list[EvidenceRequirement]:

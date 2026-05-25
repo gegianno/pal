@@ -1174,7 +1174,7 @@ def test_flow_service_readiness_supports_waivers_and_failed_evidence(tmp_path: P
     artifact_root = Path(run.artifact_root)
     artifact_root.mkdir(parents=True)
     (artifact_root / "verification.md").write_text(
-        '```json\n{"status": "blocked", "checks": [{"name": "visual", "status": "blocked", "reason": "No browser"}]}\n```',
+        '```json\n{"status": "blocked", "required_evidence": [{"check": "visual", "reason": "No browser"}]}\n```',
         encoding="utf-8",
     )
     service.approve("feat", reason="No browser.")
@@ -1327,6 +1327,12 @@ def test_flow_service_readiness_without_verification_contract(tmp_path: Path) ->
 
 def test_flow_service_readiness_helper_branches() -> None:
     assert service_module._evidence_requirements_from_payload({"blocked_checks": "browser"}) == []
+    assert (
+        service_module._evidence_requirements_from_payload(
+            {"checks": [{"name": "browser", "status": "blocked"}]}
+        )
+        == []
+    )
     assert service_module._evidence_requirements_from_payload(
         {"required_evidence": [123, {}, {"check": "manual", "phase": "verify"}]}
     ) == [
