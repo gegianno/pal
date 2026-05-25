@@ -16,6 +16,12 @@ except Exception:  # pragma: no cover - only exercised on Python <3.11 runtimes.
 class CodexConfig:
     sandbox: str = "workspace-write"  # read-only | workspace-write | danger-full-access
     approval: str = "on-request"  # untrusted | on-failure | on-request | never
+    # Non-interactive flow execution cannot surface native approval prompts safely.
+    headless_approval: str = "never"  # untrusted | on-failure | on-request | never
+    # pal persists its own execution state; Codex session files add fragility in nested sandboxes.
+    headless_ephemeral: bool = True
+    # Optional isolation for headless runs; auth still uses CODEX_HOME.
+    headless_ignore_user_config: bool = False
     full_auto: bool = False
     # Extra writable roots to pass through to Codex as repeated `--add-dir <path>` flags.
     # Useful for tool caches like ~/.npm or ~/.cache/prisma when running in workspace-write mode.
@@ -59,6 +65,18 @@ class LocalFilesConfig:
 
 
 @dataclass
+class FlowHookConfig:
+    name: str
+    command: list[str]
+    events: list[str] = field(default_factory=lambda: ["*"])
+
+
+@dataclass
+class FlowConfig:
+    hooks: list[FlowHookConfig] = field(default_factory=list)
+
+
+@dataclass
 class PalConfig:
     root: Path
     worktree_root: Path
@@ -69,6 +87,7 @@ class PalConfig:
     codex: CodexConfig = field(default_factory=CodexConfig)
     claude: ClaudeConfig = field(default_factory=ClaudeConfig)
     local_files: LocalFilesConfig = field(default_factory=LocalFilesConfig)
+    flow: FlowConfig = field(default_factory=FlowConfig)
 
     @property
     def local_config_path(self) -> Path:
@@ -171,6 +190,12 @@ def _apply_dict(cfg: PalConfig, d: dict[str, Any]) -> None:
             cfg.codex.sandbox = str(codex["sandbox"])
         if "approval" in codex:
             cfg.codex.approval = str(codex["approval"])
+        if "headless_approval" in codex:
+            cfg.codex.headless_approval = str(codex["headless_approval"])
+        if "headless_ephemeral" in codex:
+            cfg.codex.headless_ephemeral = bool(codex["headless_ephemeral"])
+        if "headless_ignore_user_config" in codex:
+            cfg.codex.headless_ignore_user_config = bool(codex["headless_ignore_user_config"])
         if "full_auto" in codex:
             cfg.codex.full_auto = bool(codex["full_auto"])
         # Support both `add_dirs = [...]` and legacy-ish `add_dir = "..."`.
@@ -228,3 +253,32 @@ def _apply_dict(cfg: PalConfig, d: dict[str, Any]) -> None:
                         repo_cfg.patterns = [str(x) for x in value["patterns"]]
                     parsed[str(repo_name)] = repo_cfg
             cfg.local_files.repos = parsed
+
+    flow = d.get("flow")
+    if isinstance(flow, dict):
+        hooks = flow.get("hooks")
+        if isinstance(hooks, list):
+            parsed_hooks: list[FlowHookConfig] = []
+            for index, hook in enumerate(hooks):
+                if not isinstance(hook, dict):
+                    continue
+                command = hook.get("command")
+                if not isinstance(command, list):
+                    continue
+                events = _flow_hook_events(hook.get("events", ["*"]))
+                parsed_hooks.append(
+                    FlowHookConfig(
+                        name=str(hook.get("name", f"hook-{index + 1}")),
+                        command=[str(part) for part in command],
+                        events=events,
+                    )
+                )
+            cfg.flow.hooks = parsed_hooks
+
+
+def _flow_hook_events(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        return [str(event) for event in value]
+    return []

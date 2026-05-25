@@ -117,5 +117,21 @@ def git_diff_stat(repo_path: Path) -> str:
         return ""
 
 
+def git_metadata_dirs(repo_path: Path) -> list[Path]:
+    dirs: list[Path] = []
+    for flag in ["--git-dir", "--git-common-dir"]:
+        try:
+            raw = run(["git", "-C", str(repo_path), "rev-parse", flag])
+        except subprocess.CalledProcessError:
+            continue
+        path = Path(raw).expanduser()
+        if not path.is_absolute():
+            path = repo_path / path
+        resolved = path.resolve()
+        if resolved.exists():
+            dirs.append(resolved if resolved.is_dir() else resolved.parent)
+    return list(dict.fromkeys(dirs))
+
+
 def git_porcelain(repo_path: Path) -> str:
     return run(["git", "-C", str(repo_path), "status", "--porcelain"])

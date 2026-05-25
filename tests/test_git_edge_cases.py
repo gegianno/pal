@@ -46,6 +46,42 @@ def test_git_helpers_return_safe_defaults_when_commands_fail(
     assert git_module.is_git_repo(tmp_path) is False
     assert git_module.branch_exists(tmp_path, "main") is False
     assert git_module.git_diff_stat(tmp_path) == ""
+    assert git_module.git_metadata_dirs(tmp_path) == []
+
+
+def test_git_metadata_dirs_resolves_git_dir_and_common_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    git_dir = repo / ".git" / "worktrees" / "repo"
+    common_file = tmp_path / "source" / ".git" / "config"
+    git_dir.mkdir(parents=True)
+    common_file.parent.mkdir(parents=True)
+    common_file.write_text("[core]\n", encoding="utf-8")
+
+    def fake_run(cmd):  # noqa: ANN001
+        if cmd[-1] == "--git-dir":
+            return ".git/worktrees/repo"
+        return str(common_file)
+
+    monkeypatch.setattr(git_module, "run", fake_run)
+
+    assert git_module.git_metadata_dirs(repo) == [git_dir.resolve(), common_file.parent.resolve()]
+
+
+def test_git_metadata_dirs_skips_missing_paths_and_failed_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+
+    def fake_run(cmd):  # noqa: ANN001
+        if cmd[-1] == "--git-dir":
+            return "missing"
+        raise subprocess.CalledProcessError(1, cmd)
+
+    monkeypatch.setattr(git_module, "run", fake_run)
+
+    assert git_module.git_metadata_dirs(repo) == []
 
 
 def test_list_child_repos_skips_workspace_and_tooling_dirs(

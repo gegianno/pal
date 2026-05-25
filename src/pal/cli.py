@@ -13,7 +13,8 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 
-from .config import load_config, global_config_path
+from .cli_config import cfg_from_options
+from .config import global_config_path
 from .completion import (
     complete_agent,
     complete_feature,
@@ -34,6 +35,7 @@ from .git import (
 from .vscode import write_code_workspace
 from .claude import run_interactive as run_claude_interactive
 from .codex import run_interactive as run_codex_interactive
+from .flow.cli import flow_app
 from .local_files import copy_local_files, resolve_local_file_paths
 
 app = typer.Typer(
@@ -43,6 +45,7 @@ app = typer.Typer(
 )
 console = Console()
 AGENTS = ("claude", "codex")
+app.add_typer(flow_app, name="flow")
 CODEX_BLOCKED_PLAN_ARGS = {
     "app-server",
     "cloud",
@@ -131,13 +134,7 @@ def _cfg_from_ctx(
     worktree_root: Optional[Path],
     branch_prefix: Optional[str],
 ):
-    overrides = {}
-    overrides["root"] = str(root)
-    if worktree_root is not None:
-        overrides["worktree_root"] = str(worktree_root)
-    if branch_prefix is not None:
-        overrides["branch_prefix"] = branch_prefix
-    return load_config(root=root, cli_overrides=overrides)
+    return cfg_from_options(root, worktree_root, branch_prefix)
 
 
 def _effective_codex_config(cfg):
@@ -868,6 +865,9 @@ def config_init(
         "[codex]\n"
         'sandbox = "workspace-write"\n'
         'approval = "on-request"\n'
+        'headless_approval = "never"\n'
+        "headless_ephemeral = true\n"
+        "headless_ignore_user_config = false\n"
         "full_auto = false\n"
         "\n"
         "[claude]\n"
@@ -914,7 +914,11 @@ def config_show(
             f"repos allowlist: {cfg.repos if cfg.repos else '(auto)'}\n"
             f"editor: {cfg.editor or '(auto)'}\n"
             f"agent: add_dirs={cfg.agent.add_dirs}\n"
-            f"codex: sandbox={cfg.codex.sandbox} approval={cfg.codex.approval} full_auto={cfg.codex.full_auto}\n"
+            f"codex: sandbox={cfg.codex.sandbox} approval={cfg.codex.approval} "
+            f"headless_approval={cfg.codex.headless_approval} "
+            f"headless_ephemeral={cfg.codex.headless_ephemeral} "
+            f"headless_ignore_user_config={cfg.codex.headless_ignore_user_config} "
+            f"full_auto={cfg.codex.full_auto}\n"
             f"codex: add_dirs={cfg.codex.add_dirs}\n"
             f"claude: permission_mode={cfg.claude.permission_mode}\n"
             f"claude: model={cfg.claude.model or '(default)'} allow_bypass_permissions={cfg.claude.allow_bypass_permissions}\n"

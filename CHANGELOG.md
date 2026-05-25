@@ -18,6 +18,18 @@ This project aims to follow Keep a Changelog and Semantic Versioning.
 - Add shell autocompletion for common arguments.
 - Add `[agent].add_dirs` support for extra writable roots.
 - Make `pal rm` remove empty/broken feature directories.
+- Add `pal flow` for checked-in agentic workflow specs, durable run state, phase briefs, headless
+  phase execution, artifact gates, approvals, block/replan loops, run-loop policies, and hooks.
+- Add `pal flow start --workspace state-only|create|reuse|validate` to keep flow state explicit
+  while optionally preparing or validating git-worktree feature workspaces.
+- Make Codex and Claude flow providers use local logged-in CLIs plus shared agent configuration for
+  sandbox/permission modes, models, extra args, and writable roots.
+- Add `pal flow init` with built-in `dev-complex` and `dev-routine` workflow templates for checked-in
+  flow scaffolding.
+- Add `pal flow ship` for durable shipping manifests plus explicit commit, push, and GitHub PR
+  creation actions.
+- Add `pal flow inspect`, `pal flow watch --follow`, richer hook environment payloads, and provider
+  execution diagnostics in manifests.
 
 ## 0.2.0
 
