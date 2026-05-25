@@ -10,6 +10,7 @@ from ..identifiers import (
     safe_child_path,
 )
 from .events import FlowEventLog
+from .evidence import FlowEvidence
 from .models import FlowEvent, FlowRun
 
 
@@ -48,6 +49,9 @@ class LocalFlowStore:
 
     def hooks_path(self, feature: str, run_id: str) -> Path:
         return self.run_dir(feature, run_id) / "hooks.jsonl"
+
+    def evidence_path(self, feature: str, run_id: str) -> Path:
+        return self.run_dir(feature, run_id) / "evidence.jsonl"
 
     def latest_output_dir(self, feature: str, run_id: str) -> Path:
         return self.run_dir(feature, run_id) / "latest"
@@ -224,3 +228,19 @@ class LocalFlowStore:
         if not path.exists():
             return []
         return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+    def append_evidence(self, run: FlowRun, evidence: FlowEvidence) -> None:
+        path = self.evidence_path(run.feature, run.run_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(evidence.to_dict(), sort_keys=True) + "\n")
+
+    def read_evidence(self, feature: str, run_id: str | None = None) -> list[FlowEvidence]:
+        resolved_run_id = self.resolve_run_id(feature, run_id)
+        path = self.evidence_path(feature, resolved_run_id)
+        if not path.exists():
+            return []
+        return [
+            FlowEvidence.from_dict(json.loads(line))
+            for line in path.read_text(encoding="utf-8").splitlines()
+        ]

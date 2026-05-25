@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 import subprocess
@@ -11,6 +12,7 @@ from typer.testing import CliRunner
 
 import pal.flow.cli as flow_cli
 from pal.cli import app
+from pal.flow.evidence import EvidenceStatus, FlowEvidence
 from pal.flow.events import FlowEventLog
 from pal.flow.models import FlowEvent, FlowPhase, FlowRun, FlowStatus
 from pal.flow.store import LocalFlowStore
@@ -1115,6 +1117,162 @@ def test_flow_approve_requires_reason_for_blocked_verification(tmp_path: Path) -
     assert "Browser check blocked by sandbox." in status.output
     assert advance.exit_code == 0, advance.output
     assert "pr" in advance.output
+
+
+def test_flow_evidence_and_readiness_commands(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "verify-flow", _verify_workflow())
+    start = runner.invoke(
+        app,
+        [
+            "flow",
+            "start",
+            "feat",
+            "--root",
+            str(tmp_path),
+            "-w",
+            "verify-flow",
+            "--phase",
+            "verify",
+        ],
+    )
+    assert start.exit_code == 0, start.output
+    store = LocalFlowStore(tmp_path / "_wt")
+    run = store.load_state("feat", store.latest_run_id("feat"))
+    root = Path(run.artifact_root)
+    root.mkdir(parents=True)
+    (root / "verification.md").write_text(
+        '```json\n{"status": "blocked"}\n```',
+        encoding="utf-8",
+    )
+    details_file = tmp_path / "details.md"
+    details_file.write_text("Browser evidence details.\n", encoding="utf-8")
+    approve = runner.invoke(
+        app,
+        [
+            "flow",
+            "approve",
+            "feat",
+            "--root",
+            str(tmp_path),
+            "--reason",
+            "Browser blocked.",
+        ],
+    )
+    advance_to_pr = runner.invoke(app, ["flow", "advance", "feat", "--root", str(tmp_path)])
+    complete = runner.invoke(app, ["flow", "advance", "feat", "--root", str(tmp_path)])
+    not_ready = runner.invoke(app, ["flow", "readiness", "feat", "--root", str(tmp_path)])
+    add = runner.invoke(
+        app,
+        [
+            "flow",
+            "evidence",
+            "add",
+            "feat",
+            "--root",
+            str(tmp_path),
+            "--check",
+            "verification",
+            "--status",
+            "passed",
+            "--summary",
+            "Browser passed.",
+            "--details-file",
+            str(details_file),
+            "--url",
+            "https://example.test/evidence",
+        ],
+    )
+    listed = runner.invoke(app, ["flow", "evidence", "list", "feat", "--root", str(tmp_path)])
+    ready_json = runner.invoke(
+        app,
+        ["flow", "readiness", "feat", "--root", str(tmp_path), "--json"],
+    )
+
+    assert approve.exit_code == 0, approve.output
+    assert advance_to_pr.exit_code == 0, advance_to_pr.output
+    assert complete.exit_code == 0, complete.output
+    assert not_ready.exit_code == 1
+    assert "not_ready" in not_ready.output
+    assert add.exit_code == 0, add.output
+    assert "pal flow evidence added" in add.output
+    assert listed.exit_code == 0, listed.output
+    assert "Browser" in listed.output
+    assert "passed." in listed.output
+    assert ready_json.exit_code == 0, ready_json.output
+    assert json.loads(_plain(ready_json.output))["status"] == "ready"
+
+
+def test_flow_evidence_details_options_are_exclusive(tmp_path: Path) -> None:
+    start = runner.invoke(app, ["flow", "start", "feat", "--root", str(tmp_path)])
+    assert start.exit_code == 0, start.output
+    details_file = tmp_path / "details.md"
+    details_file.write_text("details\n", encoding="utf-8")
+
+    conflict = runner.invoke(
+        app,
+        [
+            "flow",
+            "evidence",
+            "add",
+            "feat",
+            "--root",
+            str(tmp_path),
+            "--summary",
+            "summary",
+            "--details",
+            "inline",
+            "--details-file",
+            str(details_file),
+        ],
+    )
+    missing_file = runner.invoke(
+        app,
+        [
+            "flow",
+            "evidence",
+            "add",
+            "feat",
+            "--root",
+            str(tmp_path),
+            "--summary",
+            "summary",
+            "--details-file",
+            str(tmp_path / "missing.md"),
+        ],
+    )
+
+    assert conflict.exit_code != 0
+    assert "Use either --details or --details-file" in _plain(conflict.output)
+    assert missing_file.exit_code != 0
+    assert "Cannot read details file" in _plain(missing_file.output)
+
+
+def test_flow_cli_print_helpers_cover_empty_evidence_and_readiness_details() -> None:
+    evidence = FlowEvidence(
+        evidence_id="evidence_1",
+        run_id="run_1",
+        phase=FlowPhase.VERIFY,
+        check="visual",
+        status=EvidenceStatus.WAIVED,
+        summary="Accepted by QA.",
+        details="",
+        url="",
+        artifact="",
+        actor="human",
+        created_at="2026-04-27T00:00:00Z",
+    )
+    readiness = SimpleNamespace(
+        run_id="run_1",
+        status="ready",
+        blockers=[],
+        warnings=["Waived visual evidence."],
+        requirements=[],
+        evidence=[evidence],
+    )
+
+    assert flow_cli._resolve_details("inline", None) == "inline"
+    flow_cli._print_evidence_table("feat", [])
+    flow_cli._print_readiness(readiness)
 
 
 def test_flow_approve_rejects_unknown_phase(tmp_path: Path) -> None:

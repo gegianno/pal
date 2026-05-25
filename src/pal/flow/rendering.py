@@ -344,6 +344,7 @@ def _browser_verification_lines(phase: FlowPhase) -> list[str]:
         "- If the provider sandbox blocks local server port binding or browser launch, record the exact command and error as verification status `blocked`.",
         "- Do not mark browser-dependent verification as `passed` when browser validation was required but unavailable.",
         "- To avoid this block, run the verify phase in an environment with local loopback and browser access, or have the supervisor perform the browser check outside the provider sandbox and approve with evidence.",
+        '- After external supervisor validation, record durable evidence with `pal flow evidence add --phase verify --check verification --status passed --summary "..."`.',
     ]
 
 

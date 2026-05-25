@@ -18,6 +18,7 @@ from .artifacts import (
     ArtifactValidation,
     VerificationOutcome,
     VerificationStatus,
+    VerificationStatusError,
     resolve_artifact_path,
     validate_artifact_reference,
     validate_required_artifacts,
@@ -31,6 +32,13 @@ from .execution import (
     execution_status,
     phase_execution_targets,
     redact_command_prompt,
+)
+from .evidence import (
+    EvidenceRequirement,
+    EvidenceStatus,
+    FlowEvidence,
+    FlowReadiness,
+    normalize_evidence_check,
 )
 from .hooks import FlowHookDispatcher
 from .loop import FlowRunLoopSummary, FlowRunStep
@@ -328,6 +336,76 @@ class LocalFlowService:
     def hook_results(self, feature: str, run_id: str | None = None) -> list[object]:
         return self.store.read_hook_results(feature, run_id)
 
+    def evidence(self, feature: str, run_id: str | None = None) -> list[FlowEvidence]:
+        return self.store.read_evidence(feature, run_id)
+
+    def add_evidence(
+        self,
+        feature: str,
+        *,
+        run_id: str | None = None,
+        phase: FlowPhase = FlowPhase.VERIFY,
+        check: str = "verification",
+        status: str = EvidenceStatus.PASSED.value,
+        summary: str,
+        details: str = "",
+        url: str = "",
+        artifact: str = "",
+        actor: str = "human",
+    ) -> FlowEvidence:
+        run = self.status(feature, run_id)
+        workflow = self._stored_workflow(run)
+        self._ensure_workflow_phase(workflow, phase)
+        normalized_summary = summary.strip()
+        if not normalized_summary:
+            raise ValueError("Evidence summary is required.")
+        try:
+            evidence_status = EvidenceStatus(status.strip())
+        except ValueError as exc:
+            valid = ", ".join(item.value for item in EvidenceStatus)
+            raise ValueError(f"Evidence status must be one of: {valid}.") from exc
+        normalized_artifact = artifact.strip()
+        if normalized_artifact:
+            artifact_path = resolve_artifact_path(
+                run,
+                self.store.feature_dir(run.feature),
+                normalized_artifact,
+            )
+            if not artifact_path.is_file():
+                raise ValueError(f"Evidence artifact is missing: {normalized_artifact}")
+        evidence = FlowEvidence(
+            evidence_id=self.id_factory("evidence"),
+            run_id=run.run_id,
+            phase=phase,
+            check=normalize_evidence_check(check),
+            status=evidence_status,
+            summary=normalized_summary,
+            details=details.strip(),
+            url=url.strip(),
+            artifact=normalized_artifact,
+            actor=actor.strip() or "human",
+            created_at=self.clock(),
+        )
+        self.store.append_evidence(run, evidence)
+        self._append_event(
+            run,
+            event_type="flow.evidence.added",
+            actor=evidence.actor,
+            payload=evidence.to_dict(),
+        )
+        return evidence
+
+    def readiness(self, feature: str, run_id: str | None = None) -> FlowReadiness:
+        run = self.status(feature, run_id)
+        summary = self._readiness_summary(run)
+        self._append_event(
+            run,
+            event_type=f"flow.readiness.{summary.status}",
+            actor="pal",
+            payload=summary.to_dict(),
+        )
+        return summary
+
     def pr(
         self,
         feature: str,
@@ -347,8 +425,10 @@ class LocalFlowService:
         run = self.status(feature, run_id)
         if commit and not commit_message.strip():
             raise ValueError("--message is required when --commit is set.")
+        readiness = self._readiness_summary(run)
+        safe_draft = draft or (create_pr and not readiness.ready)
         normalized_title = title.strip() or f"{run.feature}: {run.workflow_name or run.mode}"
-        normalized_body = body.strip() or self._default_pr_body(run)
+        normalized_body = body.strip() or self._default_pr_body(run, readiness)
         body_path = self.store.write_pr_body(run, normalized_body + "\n")
         summary = self.pr_manager.prepare(
             feature=run.feature,
@@ -363,8 +443,9 @@ class LocalFlowService:
             commit_message=commit_message.strip(),
             push=push,
             create_pr=create_pr,
-            draft=draft,
+            draft=safe_draft,
         )
+        summary = summary.with_readiness(readiness.to_dict())
         manifest_path = self.store.pr_dir(run.feature, run.run_id) / "manifest.json"
         summary = summary.with_paths({"body": body_path, "manifest": str(manifest_path)})
         artifact_path = self._write_pr_phase_artifact(run, summary)
@@ -950,6 +1031,102 @@ class LocalFlowService:
             "Replan, block the phase, or fix the verification failure."
         )
 
+    def _readiness_summary(self, run: FlowRun) -> FlowReadiness:
+        evidence = self.store.read_evidence(run.feature, run.run_id)
+        blockers = self._run_status_readiness_blockers(run)
+        warnings: list[str] = []
+        requirements: list[EvidenceRequirement] = []
+        outcome, verification_error = self._readiness_verification_outcome(run)
+        if verification_error:
+            blockers.append(verification_error)
+        elif outcome and outcome.status == VerificationStatus.FAILED:
+            blockers.append("Verification failed; fix or re-run verification before merge.")
+        elif outcome and outcome.status == VerificationStatus.BLOCKED:
+            requirements.extend(self._verification_evidence_requirements(run, outcome))
+
+        latest = _latest_evidence_by_check(evidence)
+        for record in latest.values():
+            if record.status == EvidenceStatus.FAILED:
+                blockers.append(
+                    f"Evidence `{record.phase.value}/{record.check}` failed: {record.summary}"
+                )
+        for requirement in requirements:
+            record = latest.get((requirement.phase.value, requirement.check))
+            if not record:
+                blockers.append(
+                    f"Missing evidence `{requirement.phase.value}/{requirement.check}`: "
+                    f"{requirement.reason}"
+                )
+            elif record.status == EvidenceStatus.WAIVED:
+                warnings.append(
+                    f"Waived evidence `{record.phase.value}/{record.check}`: {record.summary}"
+                )
+        status = "not_ready" if blockers else "ready"
+        return FlowReadiness(
+            run_id=run.run_id,
+            status=status,
+            blockers=blockers,
+            warnings=warnings,
+            requirements=requirements,
+            evidence=evidence,
+        )
+
+    def _run_status_readiness_blockers(self, run: FlowRun) -> list[str]:
+        if run.status == FlowStatus.COMPLETED:
+            return []
+        return [f"Run status is `{run.status.value}`, not `completed`."]
+
+    def _readiness_verification_outcome(
+        self,
+        run: FlowRun,
+    ) -> tuple[VerificationOutcome | None, str]:
+        artifact = self._readiness_verification_artifact(run)
+        if not artifact:
+            return None, ""
+        try:
+            return (
+                read_verification_outcome(
+                    run,
+                    workspace_dir=self.store.feature_dir(run.feature),
+                    artifact=artifact,
+                ),
+                "",
+            )
+        except VerificationStatusError as exc:
+            return None, str(exc)
+
+    def _readiness_verification_artifact(self, run: FlowRun) -> str:
+        workflow = self._stored_workflow(run)
+        if workflow:
+            for phase in workflow.phases:
+                if phase.id == FlowPhase.VERIFY:
+                    for artifact in phase.required_artifacts:
+                        if is_verification_artifact(artifact):
+                            return artifact
+                    return ""
+            return ""
+        path = Path(run.artifact_root) / "verification.md"
+        return "artifacts/verification.md" if path.exists() else ""
+
+    def _verification_evidence_requirements(
+        self,
+        run: FlowRun,
+        outcome: VerificationOutcome,
+    ) -> list[EvidenceRequirement]:
+        requirements = _evidence_requirements_from_payload(outcome.payload)
+        if requirements:
+            return requirements
+        reason = str(outcome.payload.get("reason", "")).strip()
+        if not reason:
+            reason = run.approval_reasons.get(FlowPhase.VERIFY.value, "").strip()
+        return [
+            EvidenceRequirement(
+                phase=FlowPhase.VERIFY,
+                check="verification",
+                reason=reason or "Verification was approved while blocked.",
+            )
+        ]
+
     def _verification_outcome_for_phase(
         self,
         run: FlowRun,
@@ -1000,7 +1177,7 @@ class LocalFlowService:
         )
         return summary
 
-    def _default_pr_body(self, run: FlowRun) -> str:
+    def _default_pr_body(self, run: FlowRun, readiness: FlowReadiness) -> str:
         implementation = _read_artifact(run, "implementation.md")
         integration = _read_artifact(run, "integration.md")
         verification = _read_artifact(run, "verification.md")
@@ -1039,6 +1216,11 @@ class LocalFlowService:
             )
         lines.extend(
             [
+                "",
+                "## Readiness",
+                "",
+                f"- Status: `{readiness.status}`",
+                *_readiness_detail_lines(readiness),
                 "",
                 "## Validation",
                 "",
@@ -1292,6 +1474,74 @@ class LocalFlowService:
         self.hooks.dispatch(event=event, run=run, store=self.store)
 
 
+def _latest_evidence_by_check(
+    evidence: list[FlowEvidence],
+) -> dict[tuple[str, str], FlowEvidence]:
+    latest: dict[tuple[str, str], FlowEvidence] = {}
+    for record in evidence:
+        latest[(record.phase.value, record.check)] = record
+    return latest
+
+
+def _evidence_requirements_from_payload(payload: dict[str, object]) -> list[EvidenceRequirement]:
+    raw_items = payload.get("required_evidence", payload.get("blocked_checks", []))
+    requirements = _requirements_from_items(raw_items)
+    if requirements:
+        return requirements
+    checks = payload.get("checks", [])
+    blocked_checks = [
+        check
+        for check in checks
+        if isinstance(check, dict) and str(check.get("status", "")).strip() == "blocked"
+    ]
+    return _requirements_from_items(blocked_checks)
+
+
+def _requirements_from_items(items: object) -> list[EvidenceRequirement]:
+    if not isinstance(items, list):
+        return []
+    requirements: list[EvidenceRequirement] = []
+    for item in items:
+        requirement = _requirement_from_item(item)
+        if requirement:
+            requirements.append(requirement)
+    return requirements
+
+
+def _requirement_from_item(item: object) -> EvidenceRequirement | None:
+    if isinstance(item, str):
+        return EvidenceRequirement(
+            phase=FlowPhase.VERIFY,
+            check=normalize_evidence_check(item),
+            reason="Required verification evidence is missing.",
+        )
+    if not isinstance(item, dict):
+        return None
+    check = str(item.get("check") or item.get("name") or item.get("id") or "").strip()
+    if not check:
+        return None
+    return EvidenceRequirement(
+        phase=FlowPhase(str(item.get("phase", FlowPhase.VERIFY.value))),
+        check=normalize_evidence_check(check),
+        reason=str(item.get("reason") or item.get("summary") or "Required evidence is missing."),
+    )
+
+
+def _readiness_detail_lines(readiness: FlowReadiness) -> list[str]:
+    lines: list[str] = []
+    lines.extend(f"- Blocker: {blocker}" for blocker in readiness.blockers)
+    lines.extend(f"- Warning: {warning}" for warning in readiness.warnings)
+    lines.extend(
+        f"- Required evidence: `{requirement.phase.value}/{requirement.check}` - {requirement.reason}"
+        for requirement in readiness.requirements
+    )
+    lines.extend(
+        f"- Evidence: `{record.phase.value}/{record.check}` `{record.status.value}` - {record.summary}"
+        for record in readiness.evidence
+    )
+    return lines or ["- No unresolved blockers."]
+
+
 def _read_artifact(run: FlowRun, name: str) -> str:
     path = Path(run.artifact_root) / name
     if not path.is_file():
@@ -1425,6 +1675,7 @@ def _pr_phase_artifact_markdown(summary: FlowPrSummary) -> str:
         "## Summary",
         "",
         f"- Status: `{summary.status}`",
+        f"- Readiness: `{summary.readiness.get('status', 'unknown')}`",
         f"- Branches: {', '.join(f'`{repo.branch}`' for repo in summary.repos) or '`none`'}",
         f"- PR URLs: {', '.join(urls) if urls else '`none`'}",
         "",

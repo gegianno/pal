@@ -11,6 +11,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from ..cli_config import cfg_from_options
+from .evidence import EvidenceStatus
 from .models import FlowPhase, FlowRun
 from .providers.base import PROVIDER_STATE_ERROR
 from .runtime import build_local_flow_service
@@ -23,6 +24,10 @@ from .workflows.templates import (
 
 
 flow_app = typer.Typer(help="Manage local agentic workflow runs.", no_args_is_help=True)
+evidence_app = typer.Typer(
+    help="Record external or supervisor validation evidence.", no_args_is_help=True
+)
+flow_app.add_typer(evidence_app, name="evidence")
 console = Console()
 
 
@@ -193,6 +198,17 @@ def _read_body_file(path: Path | None) -> str:
         raise typer.BadParameter(f"Cannot read body file '{path}': {exc}") from exc
 
 
+def _resolve_details(details: str, details_file: Path | None) -> str:
+    if details.strip() and details_file:
+        raise typer.BadParameter("Use either --details or --details-file, not both.")
+    if not details_file:
+        return details
+    try:
+        return details_file.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise typer.BadParameter(f"Cannot read details file '{details_file}': {exc}") from exc
+
+
 def _resolve_request(request: str, request_file: Path | None) -> str:
     if request.strip() and request_file:
         raise typer.BadParameter("Use either --request or --request-file, not both.")
@@ -225,6 +241,50 @@ def _print_pr_summary(summary) -> None:  # noqa: ANN001
         )
     console.print(table)
     console.print(f"manifest: {summary.paths.get('manifest', '')}")
+
+
+def _print_evidence_table(feature: str, evidence: list) -> None:  # noqa: ANN001
+    table = Table(title=f"Flow evidence: {feature}", header_style="bold")
+    table.add_column("Created")
+    table.add_column("Phase")
+    table.add_column("Check")
+    table.add_column("Status")
+    table.add_column("Summary")
+    table.add_column("URL")
+    for record in evidence:
+        table.add_row(
+            record.created_at,
+            record.phase.value,
+            record.check,
+            record.status.value,
+            record.summary,
+            record.url,
+        )
+    if not evidence:
+        table.add_row("(none)", "", "", "", "", "")
+    console.print(table)
+
+
+def _print_readiness(readiness) -> None:  # noqa: ANN001
+    table = Table(title=f"Flow readiness: {readiness.run_id}", header_style="bold")
+    table.add_column("Type")
+    table.add_column("Detail")
+    table.add_row("status", readiness.status)
+    for blocker in readiness.blockers:
+        table.add_row("blocker", blocker)
+    for warning in readiness.warnings:
+        table.add_row("warning", warning)
+    for requirement in readiness.requirements:
+        table.add_row(
+            "required_evidence",
+            f"{requirement.phase.value}/{requirement.check}: {requirement.reason}",
+        )
+    for record in readiness.evidence:
+        table.add_row(
+            "evidence",
+            f"{record.phase.value}/{record.check} {record.status.value}: {record.summary}",
+        )
+    console.print(table)
 
 
 def _print_events_table(feature: str, events: list) -> None:  # noqa: ANN001
@@ -675,6 +735,26 @@ def flow_artifacts(
         raise typer.Exit(1)
 
 
+@flow_app.command("readiness")
+def flow_readiness(
+    feature: str = typer.Argument(..., help="Feature workspace name."),
+    json_output: bool = typer.Option(False, "--json", help="Print readiness as JSON."),
+    run_id: Optional[str] = typer.Option(None, "--run-id", help="Run ID. Defaults to latest."),
+    root: Path = typer.Option(Path("."), "--root", "-r"),
+    worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
+    branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
+) -> None:
+    """Compute merge readiness from run state, verification, and evidence."""
+    service = _service_from_options(root, worktree_root, branch_prefix)
+    readiness = _change_or_error(service, "readiness", feature, run_id=run_id)
+    if json_output:
+        console.print(json.dumps(readiness.to_dict(), indent=2, sort_keys=True))
+    else:
+        _print_readiness(readiness)
+    if not readiness.ready:
+        raise typer.Exit(1)
+
+
 @flow_app.command("run")
 def flow_run(
     feature: str = typer.Argument(..., help="Feature workspace name."),
@@ -832,6 +912,76 @@ def flow_replan(
             title="pal flow replanned",
         )
     )
+
+
+@evidence_app.command("add")
+def flow_evidence_add(
+    feature: str = typer.Argument(..., help="Feature workspace name."),
+    check: str = typer.Option(
+        "verification",
+        "--check",
+        help="Evidence check name, e.g. verification or browser.",
+    ),
+    status: str = typer.Option(
+        EvidenceStatus.PASSED.value,
+        "--status",
+        help="Evidence status: passed, waived, or failed.",
+    ),
+    summary: str = typer.Option(..., "--summary", "-m", help="Short evidence summary."),
+    phase: str = typer.Option(
+        FlowPhase.VERIFY.value, "--phase", help="Phase this evidence covers."
+    ),
+    details: str = typer.Option("", "--details", help="Longer evidence notes."),
+    details_file: Optional[Path] = typer.Option(
+        None,
+        "--details-file",
+        help="Read longer evidence notes from a file.",
+    ),
+    url: str = typer.Option("", "--url", help="External evidence URL."),
+    artifact: str = typer.Option("", "--artifact", help="Run artifact path with evidence."),
+    run_id: Optional[str] = typer.Option(None, "--run-id", help="Run ID. Defaults to latest."),
+    root: Path = typer.Option(Path("."), "--root", "-r"),
+    worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
+    branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
+) -> None:
+    """Record external validation evidence without reopening the run."""
+    service = _service_from_options(root, worktree_root, branch_prefix)
+    evidence = _change_or_error(
+        service,
+        "add_evidence",
+        feature,
+        run_id=run_id,
+        phase=_parse_phase(phase),
+        check=check,
+        status=status,
+        summary=summary,
+        details=_resolve_details(details, details_file),
+        url=url,
+        artifact=artifact,
+    )
+    console.print(
+        Panel.fit(
+            f"run_id: {evidence.run_id}\n"
+            f"phase: {evidence.phase.value}\n"
+            f"check: {evidence.check}\n"
+            f"status: {evidence.status.value}",
+            title="pal flow evidence added",
+        )
+    )
+
+
+@evidence_app.command("list")
+def flow_evidence_list(
+    feature: str = typer.Argument(..., help="Feature workspace name."),
+    run_id: Optional[str] = typer.Option(None, "--run-id", help="Run ID. Defaults to latest."),
+    root: Path = typer.Option(Path("."), "--root", "-r"),
+    worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
+    branch_prefix: Optional[str] = typer.Option(None, "--branch-prefix"),
+) -> None:
+    """List recorded external validation evidence."""
+    service = _service_from_options(root, worktree_root, branch_prefix)
+    evidence = _change_or_error(service, "evidence", feature, run_id=run_id)
+    _print_evidence_table(feature, evidence)
 
 
 @flow_app.command("watch")

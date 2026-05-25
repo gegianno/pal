@@ -318,3 +318,6 @@ def test_flow_pr_summary_merges_paths() -> None:
         "body": "body.md",
         "manifest": "manifest.json",
     }
+    with_readiness = summary.with_readiness({"status": "ready"})
+    assert with_readiness.readiness == {"status": "ready"}
+    assert with_readiness.to_dict()["readiness"] == {"status": "ready"}

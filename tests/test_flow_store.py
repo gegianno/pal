@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from pal.flow.evidence import EvidenceStatus, FlowEvidence
 from pal.flow.models import FlowEvent, FlowPhase, FlowPolicy, FlowRun, FlowStatus
 from pal.flow.store import LocalFlowStore
 
@@ -134,6 +135,31 @@ def test_store_writes_and_reads_hook_results(tmp_path: Path) -> None:
 
     assert store.hooks_path("feat", "run_1") == store.run_dir("feat", "run_1") / "hooks.jsonl"
     assert store.read_hook_results("feat") == [{"hook": "notify", "returncode": 0}]
+
+
+def test_store_writes_and_reads_evidence(tmp_path: Path) -> None:
+    store = LocalFlowStore(tmp_path / "_wt")
+    run = _run()
+    evidence = FlowEvidence(
+        evidence_id="evidence_1",
+        run_id=run.run_id,
+        phase=FlowPhase.VERIFY,
+        check="verification",
+        status=EvidenceStatus.PASSED,
+        summary="Browser check passed.",
+        details="Opened the reports page.",
+        url="https://example.test/evidence",
+        artifact="artifacts/browser.md",
+        actor="human",
+        created_at="2026-04-27T00:01:00Z",
+    )
+
+    store.create_run(run)
+    assert store.read_evidence("feat") == []
+    store.append_evidence(run, evidence)
+
+    assert store.evidence_path("feat", "run_1") == store.run_dir("feat", "run_1") / "evidence.jsonl"
+    assert store.read_evidence("feat") == [evidence]
 
 
 def test_store_save_state_updates_existing_run(tmp_path: Path) -> None:

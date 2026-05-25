@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -742,6 +743,9 @@ def test_flow_service_pr_uses_default_body_and_reports_failures(tmp_path: Path) 
     assert "Restored select borders" in body
     assert "## Integration Notes" in body
     assert "No API contract changes." in body
+    assert "## Readiness" in body
+    assert "Status: `not_ready`" in body
+    assert "Run status is `running`, not `completed`." in body
     assert "## Validation" in body
     assert "Verification status: `blocked`" in body
     assert "`npm test` passed" in body
@@ -758,6 +762,22 @@ def test_flow_service_pr_uses_default_body_and_reports_failures(tmp_path: Path) 
     assert (Path(run.artifact_root) / "pr.md").is_file()
     assert pr_manager.calls[0]["base"] == "main"
     assert service.events("feat")[-1].type == "flow.pr.failed"
+
+
+def test_flow_service_pr_defaults_to_draft_when_not_ready(tmp_path: Path) -> None:
+    pr_manager = RecordingPrManager()
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        pr_manager=pr_manager,
+    )
+    service.start(feature="feat", repos=["api"])
+
+    summary = service.pr("feat", create_pr=True, draft=False)
+
+    assert pr_manager.calls[0]["draft"] is True
+    assert summary.draft is True
+    assert summary.readiness["status"] == "not_ready"
 
 
 def test_flow_service_pr_requires_message_when_committing(tmp_path: Path) -> None:
@@ -1043,9 +1063,11 @@ def test_flow_service_verify_without_verification_artifact_uses_normal_gates(
 
     approved = service.approve("feat", reason="Manual verification artifact is not required.")
     advanced = service.advance("feat")
+    readiness = service.readiness("feat")
 
     assert approved.approval_reasons == {"verify": "Manual verification artifact is not required."}
     assert advanced.current_phase == FlowPhase.PR
+    assert readiness.blockers == ["Run status is `running`, not `completed`."]
 
 
 def test_flow_service_verify_blocked_status_requires_approval_reason(tmp_path: Path) -> None:
@@ -1080,6 +1102,243 @@ def test_flow_service_verify_blocked_status_requires_approval_reason(tmp_path: P
         "reason": "Browser check was blocked in sandbox.",
         "verification_status": "blocked",
     }
+
+
+def test_flow_service_readiness_requires_evidence_for_blocked_verification(
+    tmp_path: Path,
+) -> None:
+    _write_workflow(tmp_path, "verify-flow", _verify_workflow())
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+        clock=lambda: "2026-04-27T00:00:00Z",
+        id_factory=lambda prefix: f"{prefix}_1",
+    )
+    run = service.start(
+        feature="feat",
+        repos=[],
+        workflow="verify-flow",
+        phase=FlowPhase.VERIFY,
+    )
+    Path(run.artifact_root).mkdir(parents=True)
+    (Path(run.artifact_root) / "verification.md").write_text(
+        '```json\n{"status": "blocked", "required_evidence": ["browser"]}\n```',
+        encoding="utf-8",
+    )
+    service.approve("feat", reason="Browser check was blocked.")
+    service.advance("feat")
+    completed = service.advance("feat")
+
+    not_ready = service.readiness("feat")
+    evidence = service.add_evidence(
+        "feat",
+        phase=FlowPhase.VERIFY,
+        check="browser",
+        status="passed",
+        summary="Browser validation passed outside the sandbox.",
+        details="Opened the report page and checked focus styles.",
+        url="https://example.test/browser-evidence",
+        actor="qa",
+    )
+    ready = service.readiness("feat")
+
+    assert completed.status == FlowStatus.COMPLETED
+    assert not_ready.status == "not_ready"
+    assert not_ready.blockers == [
+        "Missing evidence `verify/browser`: Required verification evidence is missing."
+    ]
+    assert evidence.to_dict()["actor"] == "qa"
+    assert service.evidence("feat") == [evidence]
+    assert ready.status == "ready"
+    assert ready.blockers == []
+    assert service.events("feat")[-2].type == "flow.evidence.added"
+    assert service.events("feat")[-1].type == "flow.readiness.ready"
+
+
+def test_flow_service_readiness_supports_waivers_and_failed_evidence(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "verify-flow", _verify_workflow())
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+        clock=lambda: "2026-04-27T00:00:00Z",
+        id_factory=lambda prefix: f"{prefix}_1",
+    )
+    run = service.start(
+        feature="feat",
+        repos=[],
+        workflow="verify-flow",
+        phase=FlowPhase.VERIFY,
+    )
+    artifact_root = Path(run.artifact_root)
+    artifact_root.mkdir(parents=True)
+    (artifact_root / "verification.md").write_text(
+        '```json\n{"status": "blocked", "checks": [{"name": "visual", "status": "blocked", "reason": "No browser"}]}\n```',
+        encoding="utf-8",
+    )
+    service.approve("feat", reason="No browser.")
+    service.advance("feat")
+    service.advance("feat")
+    failed = service.add_evidence(
+        "feat",
+        check="visual",
+        status="failed",
+        summary="Visual check failed.",
+    )
+    failed_readiness = service.readiness("feat")
+    waived = service.add_evidence(
+        "feat",
+        check="visual",
+        status="waived",
+        summary="Accepted by design owner.",
+    )
+    waived_readiness = service.readiness("feat")
+
+    assert failed.status.value == "failed"
+    assert failed_readiness.status == "not_ready"
+    assert failed_readiness.blockers == ["Evidence `verify/visual` failed: Visual check failed."]
+    assert waived.status.value == "waived"
+    assert waived_readiness.status == "ready"
+    assert waived_readiness.warnings == [
+        "Waived evidence `verify/visual`: Accepted by design owner."
+    ]
+
+
+def test_flow_service_readiness_uses_blocked_reason_as_default_evidence_reason(
+    tmp_path: Path,
+) -> None:
+    _write_workflow(tmp_path, "verify-flow", _verify_workflow())
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+    run = service.start(
+        feature="feat",
+        repos=[],
+        workflow="verify-flow",
+        phase=FlowPhase.VERIFY,
+    )
+    Path(run.artifact_root).mkdir(parents=True)
+    (Path(run.artifact_root) / "verification.md").write_text(
+        '```json\n{"status": "blocked", "reason": "Browser validation required."}\n```',
+        encoding="utf-8",
+    )
+
+    readiness = service.readiness("feat")
+
+    assert readiness.requirements[0].reason == "Browser validation required."
+
+
+def test_flow_service_add_evidence_validates_inputs(tmp_path: Path) -> None:
+    _write_workflow(tmp_path, "verify-flow", _verify_workflow())
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+        id_factory=lambda prefix: f"{prefix}_1",
+    )
+    run = service.start(feature="feat", repos=[], workflow="verify-flow")
+    artifact_root = Path(run.artifact_root)
+    artifact_root.mkdir(parents=True)
+    (artifact_root / "browser.md").write_text("browser evidence\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="summary"):
+        service.add_evidence("feat", summary=" ")
+    with pytest.raises(ValueError, match="Evidence status"):
+        service.add_evidence("feat", status="unknown", summary="evidence")
+    with pytest.raises(ValueError, match="Evidence artifact is missing"):
+        service.add_evidence("feat", artifact="artifacts/missing.md", summary="evidence")
+
+    evidence = service.add_evidence(
+        "feat",
+        artifact="artifacts/browser.md",
+        summary="Evidence artifact exists.",
+        actor="",
+    )
+
+    assert evidence.actor == "human"
+    assert evidence.artifact == "artifacts/browser.md"
+
+
+def test_flow_service_readiness_reports_failed_and_missing_verification(
+    tmp_path: Path,
+) -> None:
+    _write_workflow(tmp_path, "verify-flow", _verify_workflow())
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+    )
+    service.start(
+        feature="missing",
+        repos=[],
+        workflow="verify-flow",
+        phase=FlowPhase.VERIFY,
+    )
+    failed = service.start(
+        feature="failed",
+        repos=[],
+        workflow="verify-flow",
+        phase=FlowPhase.VERIFY,
+    )
+    Path(failed.artifact_root).mkdir(parents=True)
+    (Path(failed.artifact_root) / "verification.md").write_text(
+        '```json\n{"status": "failed"}\n```',
+        encoding="utf-8",
+    )
+    service.block("failed", reason="stop")
+
+    missing_readiness = service.readiness("missing")
+    failed_readiness = service.readiness("failed")
+
+    assert missing_readiness.status == "not_ready"
+    assert "Verification artifact is missing" in missing_readiness.blockers[1]
+    assert failed_readiness.blockers == [
+        "Run status is `blocked`, not `completed`.",
+        "Verification failed; fix or re-run verification before merge.",
+    ]
+
+
+def test_flow_service_readiness_without_verification_contract(tmp_path: Path) -> None:
+    service = LocalFlowService(
+        store=LocalFlowStore(tmp_path / "_wt"),
+        providers={"fake": FakeFlowProvider()},
+    )
+    run = service.start(feature="feat", repos=[])
+    with_artifact = service.start(feature="with-artifact", repos=[])
+    Path(with_artifact.artifact_root).mkdir(parents=True)
+    (Path(with_artifact.artifact_root) / "verification.md").write_text(
+        '```json\n{"status": "passed"}\n```',
+        encoding="utf-8",
+    )
+    completed = replace(run, status=FlowStatus.COMPLETED)
+    completed_with_artifact = replace(with_artifact, status=FlowStatus.COMPLETED)
+    service.store.save_state(completed)
+    service.store.save_state(completed_with_artifact)
+
+    readiness = service.readiness("feat")
+    artifact_readiness = service.readiness("with-artifact")
+
+    assert readiness.status == "ready"
+    assert artifact_readiness.status == "ready"
+
+
+def test_flow_service_readiness_helper_branches() -> None:
+    assert service_module._evidence_requirements_from_payload({"blocked_checks": "browser"}) == []
+    assert service_module._evidence_requirements_from_payload(
+        {"required_evidence": [123, {}, {"check": "manual", "phase": "verify"}]}
+    ) == [
+        service_module.EvidenceRequirement(
+            phase=FlowPhase.VERIFY,
+            check="manual",
+            reason="Required evidence is missing.",
+        )
+    ]
+    assert service_module._readiness_detail_lines(
+        service_module.FlowReadiness(run_id="run_1", status="ready")
+    ) == ["- No unresolved blockers."]
 
 
 def test_flow_service_verify_failed_status_cannot_advance_or_approve(tmp_path: Path) -> None:

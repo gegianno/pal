@@ -66,6 +66,7 @@ class FlowPrSummary:
     draft: bool
     repos: list[FlowPrRepo]
     paths: dict[str, str] = field(default_factory=dict)
+    readiness: dict[str, Any] = field(default_factory=dict)
 
     @property
     def status(self) -> str:
@@ -73,6 +74,9 @@ class FlowPrSummary:
 
     def with_paths(self, paths: dict[str, str]) -> FlowPrSummary:
         return replace(self, paths={**self.paths, **paths})
+
+    def with_readiness(self, readiness: dict[str, Any]) -> FlowPrSummary:
+        return replace(self, readiness=dict(readiness))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -87,6 +91,7 @@ class FlowPrSummary:
             "pr_requested": self.pr_requested,
             "draft": self.draft,
             "paths": dict(self.paths),
+            "readiness": dict(self.readiness),
             "repos": [repo.to_dict() for repo in self.repos],
         }
 

@@ -259,6 +259,12 @@ bind a local dev-server port or launch a browser because of its sandbox, the ver
 use `blocked`, not `passed`; then a supervisor can run the browser check in a less restricted local
 terminal or remote runner and approve with the evidence. To avoid the block entirely, run the verify
 provider in an environment that allows local loopback and browser access.
+When blocked verification is approved, pal keeps the run merge readiness at `not_ready` until the
+missing evidence is recorded or explicitly waived. Use `pal flow evidence add <feature> --phase
+verify --check verification --status passed --summary "..."` after external validation, or
+`--status waived` with a clear reason when the missing check is intentionally accepted. `pal flow
+readiness <feature>` reports only `ready` or `not_ready`; blockers, warnings, waivers, and evidence
+records provide the detail.
 
 Built-in development workflows use `implement -> verify -> pr -> review` for routine work and
 `explore -> design -> implement -> verify -> pr -> review` for complex work. The `pr` phase is
@@ -278,8 +284,9 @@ expectations, not pal-executed actions. Keep `requires` for execution capabiliti
 action plan under `.pal/runs/<run-id>/pr/`. When explicitly requested, it can commit
 (`--commit --message ...`), push (`--push`), and create or update GitHub PRs through the local `gh`
 CLI (`--create-pr --no-dry-run`). The default PR body is structured from the run request and phase
-artifacts, including changes, validation evidence, review state, risks, and flow metadata. Failures
-are recorded in the durable PR manifest instead of being hidden in terminal output.
+artifacts, including changes, readiness, validation evidence, review state, risks, and flow
+metadata. If readiness is `not_ready`, pal-created PRs are kept draft by default. Failures are
+recorded in the durable PR manifest instead of being hidden in terminal output.
 
 `pal flow run <feature>` is the policy-aware phase loop:
 
@@ -437,6 +444,9 @@ pal flow start <feature> [--workflow workflow] [--request text|--request-file pa
 pal flow render <feature>
 pal flow execute <feature>
 pal flow artifacts <feature>
+pal flow readiness <feature>
+pal flow evidence add <feature> --summary msg [--check check] [--status passed|waived|failed]
+pal flow evidence list <feature>
 pal flow run <feature>
 pal flow approve <feature>
 pal flow advance <feature> [--force-artifacts]
