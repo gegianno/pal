@@ -21,6 +21,7 @@ def test_flow_evidence_round_trips_optional_fields_and_normalizes_check() -> Non
             "check": "browser",
             "status": "passed",
             "summary": "Browser check passed.",
+            "artifact": "artifacts/legacy.png",
             "created_at": "2026-04-27T00:00:00Z",
         }
     )
@@ -34,10 +35,20 @@ def test_flow_evidence_round_trips_optional_fields_and_normalizes_check() -> Non
         "summary": "Browser check passed.",
         "details": "",
         "url": "",
-        "artifact": "",
+        "artifacts": ["artifacts/legacy.png"],
         "actor": "",
         "created_at": "2026-04-27T00:00:00Z",
     }
+    malformed_artifacts = FlowEvidence.from_dict(
+        {
+            **parsed.to_dict(),
+            "artifacts": "not-a-list",
+            "artifact": "artifacts/fallback.png",
+        }
+    )
+    assert malformed_artifacts.artifacts == ["artifacts/fallback.png"]
+    legacy_waived = FlowEvidence.from_dict({**parsed.to_dict(), "status": "waived"})
+    assert legacy_waived.status == EvidenceStatus.SKIPPED
 
 
 def test_flow_readiness_serializes_requirements_and_evidence() -> None:
@@ -46,11 +57,11 @@ def test_flow_readiness_serializes_requirements_and_evidence() -> None:
         run_id="run_1",
         phase=FlowPhase.VERIFY,
         check="verification",
-        status=EvidenceStatus.WAIVED,
-        summary="Accepted by QA.",
+        status=EvidenceStatus.SKIPPED,
+        summary="Skipped by QA.",
         details="",
         url="",
-        artifact="",
+        artifacts=[],
         actor="human",
         created_at="2026-04-27T00:00:00Z",
     )
@@ -58,7 +69,7 @@ def test_flow_readiness_serializes_requirements_and_evidence() -> None:
         run_id="run_1",
         status="ready",
         blockers=[],
-        warnings=["Waived evidence."],
+        warnings=["Skipped evidence."],
         requirements=[
             EvidenceRequirement(
                 phase=FlowPhase.VERIFY,

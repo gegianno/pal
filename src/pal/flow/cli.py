@@ -250,6 +250,7 @@ def _print_evidence_table(feature: str, evidence: list) -> None:  # noqa: ANN001
     table.add_column("Check")
     table.add_column("Status")
     table.add_column("Summary")
+    table.add_column("Artifacts")
     table.add_column("URL")
     for record in evidence:
         table.add_row(
@@ -258,10 +259,11 @@ def _print_evidence_table(feature: str, evidence: list) -> None:  # noqa: ANN001
             record.check,
             record.status.value,
             record.summary,
+            ", ".join(record.artifacts),
             record.url,
         )
     if not evidence:
-        table.add_row("(none)", "", "", "", "", "")
+        table.add_row("(none)", "", "", "", "", "", "")
     console.print(table)
 
 
@@ -925,7 +927,7 @@ def flow_evidence_add(
     status: str = typer.Option(
         EvidenceStatus.PASSED.value,
         "--status",
-        help="Evidence status: passed, waived, or failed.",
+        help="Evidence status: passed, skipped, or failed.",
     ),
     summary: str = typer.Option(..., "--summary", "-m", help="Short evidence summary."),
     phase: str = typer.Option(
@@ -938,7 +940,11 @@ def flow_evidence_add(
         help="Read longer evidence notes from a file.",
     ),
     url: str = typer.Option("", "--url", help="External evidence URL."),
-    artifact: str = typer.Option("", "--artifact", help="Run artifact path with evidence."),
+    artifacts: Optional[List[str]] = typer.Option(
+        None,
+        "--artifact",
+        help="Run artifact path with evidence. Repeatable.",
+    ),
     run_id: Optional[str] = typer.Option(None, "--run-id", help="Run ID. Defaults to latest."),
     root: Path = typer.Option(Path("."), "--root", "-r"),
     worktree_root: Optional[Path] = typer.Option(None, "--worktree-root"),
@@ -957,7 +963,7 @@ def flow_evidence_add(
         summary=summary,
         details=_resolve_details(details, details_file),
         url=url,
-        artifact=artifact,
+        artifacts=list(artifacts or []),
     )
     console.print(
         Panel.fit(

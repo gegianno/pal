@@ -260,11 +260,14 @@ use `blocked`, not `passed`; then a supervisor can run the browser check in a le
 terminal or remote runner and approve with the evidence. To avoid the block entirely, run the verify
 provider in an environment that allows local loopback and browser access.
 When blocked verification is approved, pal keeps the run merge readiness at `not_ready` until the
-missing evidence is recorded or explicitly waived. Use `pal flow evidence add <feature> --phase
+missing evidence is recorded or explicitly skipped. Use `pal flow evidence add <feature> --phase
 verify --check verification --status passed --summary "..."` after external validation, or
-`--status waived` with a clear reason when the missing check is intentionally accepted. `pal flow
-readiness <feature>` reports only `ready` or `not_ready`; blockers, warnings, waivers, and evidence
+`--status skipped` with a clear reason when the missing check is intentionally not required. `pal flow
+readiness <feature>` reports only `ready` or `not_ready`; blockers, warnings, skips, and evidence
 records provide the detail.
+Evidence can attach one or more run artifacts with repeated `--artifact` flags. For browser
+validation, store screenshots under `.pal/artifacts` and reference them from the evidence record so
+the PR body and run manifest can point reviewers to durable visual proof.
 
 Built-in development workflows use `implement -> verify -> pr -> review` for routine work and
 `explore -> design -> implement -> verify -> pr -> review` for complex work. The `pr` phase is
@@ -445,7 +448,7 @@ pal flow render <feature>
 pal flow execute <feature>
 pal flow artifacts <feature>
 pal flow readiness <feature>
-pal flow evidence add <feature> --summary msg [--check check] [--status passed|waived|failed]
+pal flow evidence add <feature> --summary msg [--check check] [--status passed|skipped|failed] [--artifact path...]
 pal flow evidence list <feature>
 pal flow run <feature>
 pal flow approve <feature>

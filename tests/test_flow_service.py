@@ -1156,7 +1156,7 @@ def test_flow_service_readiness_requires_evidence_for_blocked_verification(
     assert service.events("feat")[-1].type == "flow.readiness.ready"
 
 
-def test_flow_service_readiness_supports_waivers_and_failed_evidence(tmp_path: Path) -> None:
+def test_flow_service_readiness_supports_skips_and_failed_evidence(tmp_path: Path) -> None:
     _write_workflow(tmp_path, "verify-flow", _verify_workflow())
     service = LocalFlowService(
         store=LocalFlowStore(tmp_path / "_wt"),
@@ -1187,21 +1187,21 @@ def test_flow_service_readiness_supports_waivers_and_failed_evidence(tmp_path: P
         summary="Visual check failed.",
     )
     failed_readiness = service.readiness("feat")
-    waived = service.add_evidence(
+    skipped = service.add_evidence(
         "feat",
         check="visual",
-        status="waived",
-        summary="Accepted by design owner.",
+        status="skipped",
+        summary="Skipped by design owner.",
     )
-    waived_readiness = service.readiness("feat")
+    skipped_readiness = service.readiness("feat")
 
     assert failed.status.value == "failed"
     assert failed_readiness.status == "not_ready"
     assert failed_readiness.blockers == ["Evidence `verify/visual` failed: Visual check failed."]
-    assert waived.status.value == "waived"
-    assert waived_readiness.status == "ready"
-    assert waived_readiness.warnings == [
-        "Waived evidence `verify/visual`: Accepted by design owner."
+    assert skipped.status.value == "skipped"
+    assert skipped_readiness.status == "ready"
+    assert skipped_readiness.warnings == [
+        "Skipped evidence `verify/visual`: Skipped by design owner."
     ]
 
 
@@ -1243,23 +1243,24 @@ def test_flow_service_add_evidence_validates_inputs(tmp_path: Path) -> None:
     artifact_root = Path(run.artifact_root)
     artifact_root.mkdir(parents=True)
     (artifact_root / "browser.md").write_text("browser evidence\n", encoding="utf-8")
+    (artifact_root / "browser.png").write_text("browser screenshot\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="summary"):
         service.add_evidence("feat", summary=" ")
     with pytest.raises(ValueError, match="Evidence status"):
         service.add_evidence("feat", status="unknown", summary="evidence")
     with pytest.raises(ValueError, match="Evidence artifact is missing"):
-        service.add_evidence("feat", artifact="artifacts/missing.md", summary="evidence")
+        service.add_evidence("feat", artifacts=["artifacts/missing.md"], summary="evidence")
 
     evidence = service.add_evidence(
         "feat",
-        artifact="artifacts/browser.md",
+        artifacts=["artifacts/browser.md", "artifacts/browser.png"],
         summary="Evidence artifact exists.",
         actor="",
     )
 
     assert evidence.actor == "human"
-    assert evidence.artifact == "artifacts/browser.md"
+    assert evidence.artifacts == ["artifacts/browser.md", "artifacts/browser.png"]
 
 
 def test_flow_service_readiness_reports_failed_and_missing_verification(

@@ -1146,6 +1146,8 @@ def test_flow_evidence_and_readiness_commands(tmp_path: Path) -> None:
     )
     details_file = tmp_path / "details.md"
     details_file.write_text("Browser evidence details.\n", encoding="utf-8")
+    (root / "browser-default.png").write_text("png 1\n", encoding="utf-8")
+    (root / "browser-focus.png").write_text("png 2\n", encoding="utf-8")
     approve = runner.invoke(
         app,
         [
@@ -1180,6 +1182,10 @@ def test_flow_evidence_and_readiness_commands(tmp_path: Path) -> None:
             str(details_file),
             "--url",
             "https://example.test/evidence",
+            "--artifact",
+            "artifacts/browser-default.png",
+            "--artifact",
+            "artifacts/browser-focus.png",
         ],
     )
     listed = runner.invoke(app, ["flow", "evidence", "list", "feat", "--root", str(tmp_path)])
@@ -1198,6 +1204,10 @@ def test_flow_evidence_and_readiness_commands(tmp_path: Path) -> None:
     assert listed.exit_code == 0, listed.output
     assert "Browser" in listed.output
     assert "passed." in listed.output
+    assert store.read_evidence("feat")[0].artifacts == [
+        "artifacts/browser-default.png",
+        "artifacts/browser-focus.png",
+    ]
     assert ready_json.exit_code == 0, ready_json.output
     assert json.loads(_plain(ready_json.output))["status"] == "ready"
 
@@ -1253,11 +1263,11 @@ def test_flow_cli_print_helpers_cover_empty_evidence_and_readiness_details() -> 
         run_id="run_1",
         phase=FlowPhase.VERIFY,
         check="visual",
-        status=EvidenceStatus.WAIVED,
-        summary="Accepted by QA.",
+        status=EvidenceStatus.SKIPPED,
+        summary="Skipped by QA.",
         details="",
         url="",
-        artifact="",
+        artifacts=[],
         actor="human",
         created_at="2026-04-27T00:00:00Z",
     )
@@ -1265,7 +1275,7 @@ def test_flow_cli_print_helpers_cover_empty_evidence_and_readiness_details() -> 
         run_id="run_1",
         status="ready",
         blockers=[],
-        warnings=["Waived visual evidence."],
+        warnings=["Skipped visual evidence."],
         requirements=[],
         evidence=[evidence],
     )

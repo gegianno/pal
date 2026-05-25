@@ -350,7 +350,7 @@ class LocalFlowService:
         summary: str,
         details: str = "",
         url: str = "",
-        artifact: str = "",
+        artifacts: list[str] | None = None,
         actor: str = "human",
     ) -> FlowEvidence:
         run = self.status(feature, run_id)
@@ -364,15 +364,17 @@ class LocalFlowService:
         except ValueError as exc:
             valid = ", ".join(item.value for item in EvidenceStatus)
             raise ValueError(f"Evidence status must be one of: {valid}.") from exc
-        normalized_artifact = artifact.strip()
-        if normalized_artifact:
+        normalized_artifacts = [
+            artifact.strip() for artifact in artifacts or [] if artifact.strip()
+        ]
+        for artifact in normalized_artifacts:
             artifact_path = resolve_artifact_path(
                 run,
                 self.store.feature_dir(run.feature),
-                normalized_artifact,
+                artifact,
             )
             if not artifact_path.is_file():
-                raise ValueError(f"Evidence artifact is missing: {normalized_artifact}")
+                raise ValueError(f"Evidence artifact is missing: {artifact}")
         evidence = FlowEvidence(
             evidence_id=self.id_factory("evidence"),
             run_id=run.run_id,
@@ -382,7 +384,7 @@ class LocalFlowService:
             summary=normalized_summary,
             details=details.strip(),
             url=url.strip(),
-            artifact=normalized_artifact,
+            artifacts=normalized_artifacts,
             actor=actor.strip() or "human",
             created_at=self.clock(),
         )
@@ -1057,9 +1059,9 @@ class LocalFlowService:
                     f"Missing evidence `{requirement.phase.value}/{requirement.check}`: "
                     f"{requirement.reason}"
                 )
-            elif record.status == EvidenceStatus.WAIVED:
+            elif record.status == EvidenceStatus.SKIPPED:
                 warnings.append(
-                    f"Waived evidence `{record.phase.value}/{record.check}`: {record.summary}"
+                    f"Skipped evidence `{record.phase.value}/{record.check}`: {record.summary}"
                 )
         status = "not_ready" if blockers else "ready"
         return FlowReadiness(

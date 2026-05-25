@@ -149,7 +149,7 @@ def test_store_writes_and_reads_evidence(tmp_path: Path) -> None:
         summary="Browser check passed.",
         details="Opened the reports page.",
         url="https://example.test/evidence",
-        artifact="artifacts/browser.md",
+        artifacts=["artifacts/browser.md", "artifacts/focus.png"],
         actor="human",
         created_at="2026-04-27T00:01:00Z",
     )

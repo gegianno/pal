@@ -10,7 +10,7 @@ from .models import FlowPhase
 
 class EvidenceStatus(str, Enum):
     PASSED = "passed"
-    WAIVED = "waived"
+    SKIPPED = "skipped"
     FAILED = "failed"
 
 
@@ -24,7 +24,7 @@ class FlowEvidence:
     summary: str
     details: str
     url: str
-    artifact: str
+    artifacts: list[str]
     actor: str
     created_at: str
 
@@ -38,7 +38,7 @@ class FlowEvidence:
             "summary": self.summary,
             "details": self.details,
             "url": self.url,
-            "artifact": self.artifact,
+            "artifacts": list(self.artifacts),
             "actor": self.actor,
             "created_at": self.created_at,
         }
@@ -50,11 +50,11 @@ class FlowEvidence:
             run_id=str(data["run_id"]),
             phase=FlowPhase(str(data["phase"])),
             check=normalize_evidence_check(str(data["check"])),
-            status=EvidenceStatus(str(data["status"])),
+            status=_evidence_status(data["status"]),
             summary=str(data["summary"]),
             details=str(data.get("details", "")),
             url=str(data.get("url", "")),
-            artifact=str(data.get("artifact", "")),
+            artifacts=_evidence_artifacts(data),
             actor=str(data.get("actor", "")),
             created_at=str(data["created_at"]),
         )
@@ -100,3 +100,19 @@ class FlowReadiness:
 
 def normalize_evidence_check(value: str) -> str:
     return normalize_identifier(value, "Evidence check")
+
+
+def _evidence_artifacts(data: dict[str, Any]) -> list[str]:
+    if "artifacts" in data:
+        artifacts = data.get("artifacts", [])
+        if isinstance(artifacts, list):
+            return [str(artifact) for artifact in artifacts]
+    artifact = str(data.get("artifact", "")).strip()
+    return [artifact] if artifact else []
+
+
+def _evidence_status(value: Any) -> EvidenceStatus:
+    raw_status = str(value)
+    if raw_status == "waived":
+        return EvidenceStatus.SKIPPED
+    return EvidenceStatus(raw_status)
