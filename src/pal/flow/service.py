@@ -1326,7 +1326,7 @@ def _markdown_section(markdown: str, heading: str) -> str:
     lines = markdown.splitlines()
     wanted = heading.strip().lower()
     for index, line in enumerate(lines):
-        match = re.match(r"^(#{1,6})\s+(.+?)\s*$", line)
+        match = re.match(r"^(#{2,6})\s+(.+?)\s*$", line)
         if not match or match.group(2).strip().lower() != wanted:
             continue
         level = len(match.group(1))

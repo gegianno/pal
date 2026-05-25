@@ -801,6 +801,10 @@ def test_pr_body_helpers_handle_missing_fallbacks_and_status_variants() -> None:
         '## Summary\n\nNo code findings.\n\n```json\n{"status": "approved"}\n```',
         preferred_sections=["Summary"],
     ) == ["No code findings."]
+    assert service_module._artifact_summary_lines(
+        "# Review\n\nTop-level title should not be extracted.\n\n## Summary\n\nUseful summary.",
+        preferred_sections=["Review", "Summary"],
+    ) == ["Useful summary."]
     assert (
         service_module._artifact_summary_lines(
             "## Summary\n\n" + ("x" * 1700),
