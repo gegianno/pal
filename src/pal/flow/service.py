@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 import json
 from pathlib import Path
+import re
 from typing import Callable, Mapping
 
 from ..git import git_metadata_dirs
@@ -1000,16 +1001,111 @@ class LocalFlowService:
         return summary
 
     def _default_pr_body(self, run: FlowRun) -> str:
+        implementation = _read_artifact(run, "implementation.md")
+        integration = _read_artifact(run, "integration.md")
+        verification = _read_artifact(run, "verification.md")
+        regression = _read_artifact(run, "regression.md")
+        review = _read_artifact(run, "review.md")
+        docs_review = _read_artifact(run, "docs-review.md")
+        verification_status = _verification_status_from_markdown(verification)
+        summary = _first_nonempty_paragraph(run.request)
+
         lines = [
             f"# {run.feature}",
             "",
-            "## pal flow",
+            "## Summary",
             "",
-            f"- Run ID: `{run.run_id}`",
-            f"- Status: `{run.status.value}`",
-            f"- Current phase: `{run.current_phase.value}`",
-            f"- Mode: `{run.mode}`",
+            summary or f"Changes for `{run.feature}`.",
+            "",
+            "## Changes",
+            "",
+            *_artifact_summary_lines(
+                implementation,
+                preferred_sections=["Summary", "Changes", "Files Changed", "Files changed"],
+                fallback="Implementation artifact has not been written yet.",
+            ),
         ]
+        if integration:
+            lines.extend(
+                [
+                    "",
+                    "## Integration Notes",
+                    "",
+                    *_artifact_summary_lines(
+                        integration,
+                        preferred_sections=["Summary", "Compatibility", "Integration"],
+                    ),
+                ]
+            )
+        lines.extend(
+            [
+                "",
+                "## Validation",
+                "",
+                f"- Verification status: `{verification_status or 'not recorded'}`",
+                *_artifact_summary_lines(
+                    verification,
+                    preferred_sections=[
+                        "Automated Checks",
+                        "Validation",
+                        "Checks",
+                        "Browser Verification",
+                        "Manual Verification",
+                    ],
+                    fallback="- Verification artifact has not been written yet.",
+                ),
+            ]
+        )
+        if regression:
+            lines.extend(
+                [
+                    "",
+                    "## Regression Coverage",
+                    "",
+                    *_artifact_summary_lines(
+                        regression,
+                        preferred_sections=["Summary", "Risks", "Coverage"],
+                    ),
+                ]
+            )
+        lines.extend(
+            [
+                "",
+                "## Review",
+                "",
+                *_artifact_summary_lines(
+                    review,
+                    preferred_sections=["Summary", "Findings", "Review"],
+                    fallback="Review phase has not completed yet.",
+                ),
+            ]
+        )
+        if docs_review:
+            lines.extend(
+                [
+                    "",
+                    "## Docs And Operations",
+                    "",
+                    *_artifact_summary_lines(
+                        docs_review,
+                        preferred_sections=["Summary", "Docs", "Operations"],
+                    ),
+                ]
+            )
+        blocked_notes = _blocked_verification_lines(run, verification_status, verification)
+        if blocked_notes:
+            lines.extend(["", "## Risks And Follow-Ups", "", *blocked_notes])
+        lines.extend(
+            [
+                "",
+                "## Flow Metadata",
+                "",
+                f"- Run ID: `{run.run_id}`",
+                f"- Status: `{run.status.value}`",
+                f"- Current phase: `{run.current_phase.value}`",
+                f"- Mode: `{run.mode}`",
+            ]
+        )
         if run.workflow_name:
             lines.append(f"- Workflow: `{run.workflow_name}`")
         if run.work_type:
@@ -1194,6 +1290,124 @@ class LocalFlowService:
         )
         self.store.append_event(run.feature, run.run_id, event)
         self.hooks.dispatch(event=event, run=run, store=self.store)
+
+
+def _read_artifact(run: FlowRun, name: str) -> str:
+    path = Path(run.artifact_root) / name
+    if not path.is_file():
+        return ""
+    return path.read_text(encoding="utf-8")
+
+
+def _artifact_summary_lines(
+    markdown: str,
+    *,
+    preferred_sections: list[str],
+    fallback: str = "",
+    limit: int = 1600,
+) -> list[str]:
+    if not markdown.strip():
+        return [fallback] if fallback else []
+
+    sections: list[str] = []
+    for heading in preferred_sections:
+        section = _markdown_section(markdown, heading)
+        if section:
+            sections.append(section)
+    content = "\n\n".join(dict.fromkeys(sections))
+    if not content:
+        content = _first_nonempty_paragraph(_strip_json_blocks(markdown))
+    if not content:
+        return [fallback] if fallback else []
+    return _truncate_markdown(content, limit).splitlines()
+
+
+def _markdown_section(markdown: str, heading: str) -> str:
+    lines = markdown.splitlines()
+    wanted = heading.strip().lower()
+    for index, line in enumerate(lines):
+        match = re.match(r"^(#{1,6})\s+(.+?)\s*$", line)
+        if not match or match.group(2).strip().lower() != wanted:
+            continue
+        level = len(match.group(1))
+        end = len(lines)
+        for next_index in range(index + 1, len(lines)):
+            next_match = re.match(r"^(#{1,6})\s+", lines[next_index])
+            if next_match and len(next_match.group(1)) <= level:
+                end = next_index
+                break
+        return "\n".join(lines[index + 1 : end]).strip()
+    return ""
+
+
+def _first_nonempty_paragraph(text: str) -> str:
+    paragraphs = [paragraph.strip() for paragraph in re.split(r"\n\s*\n", text.strip())]
+    for paragraph in paragraphs:
+        cleaned = "\n".join(
+            line.strip()
+            for line in paragraph.splitlines()
+            if line.strip() and not line.strip().startswith("#")
+        ).strip()
+        if cleaned:
+            return cleaned
+    return ""
+
+
+def _strip_json_blocks(markdown: str) -> str:
+    return re.sub(
+        r"```json\s*.*?```",
+        "",
+        markdown,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+
+
+def _truncate_markdown(text: str, limit: int) -> str:
+    stripped = text.strip()
+    if len(stripped) <= limit:
+        return stripped
+    return stripped[: limit - 22].rstrip() + "\n\n...truncated for PR body"
+
+
+def _verification_status_from_markdown(markdown: str) -> str:
+    for candidate in _json_object_candidates(markdown):
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict) and isinstance(parsed.get("status"), str):
+            return str(parsed["status"])
+    return ""
+
+
+def _json_object_candidates(markdown: str) -> list[str]:
+    candidates = re.findall(
+        r"```(?:json)?\s*(.*?)\s*```",
+        markdown,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    stripped = markdown.strip()
+    if stripped.startswith("{") and stripped.endswith("}"):
+        candidates.append(stripped)
+    return candidates
+
+
+def _blocked_verification_lines(
+    run: FlowRun,
+    verification_status: str,
+    verification: str,
+) -> list[str]:
+    if verification_status != VerificationStatus.BLOCKED.value:
+        return []
+    reason = run.approval_reasons.get(FlowPhase.VERIFY.value, "").strip()
+    lines = [
+        "- Verification status is `blocked`; reviewers should inspect the validation limitation before merge.",
+    ]
+    if reason:
+        lines.append(f"- Human approval reason: {reason}")
+    if _markdown_section(verification, "Browser Verification"):
+        lines.append("- Browser verification details are recorded in the Validation section.")
+    return lines
 
 
 def _pr_phase_artifact_markdown(summary: FlowPrSummary) -> str:

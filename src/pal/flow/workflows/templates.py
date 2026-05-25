@@ -122,7 +122,7 @@ phases:
     agents:
       - id: test-runner
         role: validation and test execution specialist
-        prompt: Run targeted and full validation, capture exact commands, failures, and fixes. Set verification JSON status to passed, blocked, or failed.
+        prompt: Run targeted and full validation, including browser or local UI checks when the change affects UI behavior. Capture exact commands, evidence, failures, and fixes. Set verification JSON status to passed only when required checks passed, blocked when infrastructure or sandbox limits prevented required validation, or failed when validation ran and found a real failure.
         produces:
           - artifacts/verification.md
         requires:
@@ -149,7 +149,7 @@ phases:
     agents:
       - id: pr-manager
         role: draft PR creation and update specialist
-        prompt: Use your native GitHub tools or gh CLI to create or update the draft PR for the verified implementation. Link the PR to Linear if an issue is provided or discoverable through your native tools. Record branch, commit, push status, PR URL, Linear links, review-readiness notes, and any blocker. You may use pal flow pr as a deterministic fallback, but pal does not own connector auth or remote side effects for this phase.
+        prompt: Use your native GitHub tools or gh CLI to create or update the draft PR for the verified implementation. The PR body must be structured for reviewers with Summary, Changes, Validation, Browser or manual verification limits, Risks and follow-ups, and Links. Link the PR to Linear if an issue is provided or discoverable through your native tools. Record branch, commit, push status, PR URL, Linear links, review-readiness notes, and any blocker. You may use pal flow pr as a deterministic fallback, but pal does not own connector auth or remote side effects for this phase.
         produces:
           - artifacts/pr.md
         requires:
@@ -241,7 +241,7 @@ phases:
     agents:
       - id: verifier
         role: validation specialist
-        prompt: Run the relevant validation commands and capture exact evidence. Set verification JSON status to passed, blocked, or failed.
+        prompt: Run the relevant validation commands, including browser or local UI checks when the change affects UI behavior. Capture exact commands and evidence. Set verification JSON status to passed only when required checks passed, blocked when infrastructure or sandbox limits prevented required validation, or failed when validation ran and found a real failure.
         produces:
           - artifacts/verification.md
         requires:
@@ -260,7 +260,7 @@ phases:
     agents:
       - id: pr-manager
         role: draft PR creation and update specialist
-        prompt: Use your native GitHub tools or gh CLI to create or update the draft PR for the verified implementation. Link the PR to Linear if an issue is provided or discoverable through your native tools. Record branch, commit, push status, PR URL, Linear links, review-readiness notes, and any blocker. You may use pal flow pr as a deterministic fallback, but pal does not own connector auth or remote side effects for this phase.
+        prompt: Use your native GitHub tools or gh CLI to create or update the draft PR for the verified implementation. The PR body must be structured for reviewers with Summary, Changes, Validation, Browser or manual verification limits, Risks and follow-ups, and Links. Link the PR to Linear if an issue is provided or discoverable through your native tools. Record branch, commit, push status, PR URL, Linear links, review-readiness notes, and any blocker. You may use pal flow pr as a deterministic fallback, but pal does not own connector auth or remote side effects for this phase.
         produces:
           - artifacts/pr.md
         requires:

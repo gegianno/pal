@@ -689,12 +689,69 @@ def test_flow_service_pr_uses_default_body_and_reports_failures(tmp_path: Path) 
         workflow_library=LocalWorkflowLibrary(tmp_path),
         pr_manager=pr_manager,
     )
-    run = service.start(feature="feat", repos=[], workflow="dev-complex")
+    run = service.start(
+        feature="feat",
+        repos=[],
+        workflow="dev-complex",
+        request="Fix the select styling regression.\n\nKeep behavior unchanged.",
+    )
+    artifact_root = Path(run.artifact_root)
+    artifact_root.mkdir(parents=True)
+    (artifact_root / "implementation.md").write_text(
+        "# Implementation\n\n"
+        "```json\n"
+        '{"files": ["ui/select.tsx"]}\n'
+        "```\n\n"
+        "## Summary\n\n"
+        "- Restored select borders and focus styling.\n\n"
+        "## Files Changed\n\n"
+        "- `ui/select.tsx`\n",
+        encoding="utf-8",
+    )
+    (artifact_root / "integration.md").write_text(
+        "## Compatibility\n\nNo API contract changes.\n",
+        encoding="utf-8",
+    )
+    (artifact_root / "verification.md").write_text(
+        "# Verification\n\n"
+        "```json\n"
+        '{"status": "blocked"}\n'
+        "```\n\n"
+        "## Automated Checks\n\n"
+        "- `npm test` passed.\n\n"
+        "## Browser Verification\n\n"
+        "- Browser launch was blocked by sandbox limits.\n",
+        encoding="utf-8",
+    )
+    (artifact_root / "regression.md").write_text(
+        "No additional regression risk found.\n",
+        encoding="utf-8",
+    )
+    (artifact_root / "docs-review.md").write_text(
+        "## Summary\n\nNo docs updates required.\n",
+        encoding="utf-8",
+    )
 
     summary = service.pr("feat", repos=["api"], base=" ", dry_run=True)
 
     body = (store.pr_dir("feat", run.run_id) / "body.md").read_text(encoding="utf-8")
     assert summary.status == "failed"
+    assert "## Summary" in body
+    assert "Fix the select styling regression." in body
+    assert "## Changes" in body
+    assert "Restored select borders" in body
+    assert "## Integration Notes" in body
+    assert "No API contract changes." in body
+    assert "## Validation" in body
+    assert "Verification status: `blocked`" in body
+    assert "`npm test` passed" in body
+    assert "Browser launch was blocked" in body
+    assert "## Regression Coverage" in body
+    assert "No additional regression risk found." in body
+    assert "## Docs And Operations" in body
+    assert "No docs updates required." in body
+    assert "## Risks And Follow-Ups" in body
+    assert "Verification status is `blocked`" in body
     assert "Workflow: `dev-complex`" in body
     assert "Work type: `dev`" in body
     assert "Repos: `api`" in body
@@ -712,6 +769,73 @@ def test_flow_service_pr_requires_message_when_committing(tmp_path: Path) -> Non
 
     with pytest.raises(ValueError, match="--message is required"):
         service.pr("feat", commit=True, commit_message=" ")
+
+
+def test_pr_body_helpers_handle_missing_fallbacks_and_status_variants() -> None:
+    run = FlowRun.from_dict(
+        {
+            **FlowRun(
+                run_id="run_1",
+                feature="feat",
+                mode="routine",
+                repos=[],
+                current_phase=FlowPhase.PR,
+                status=FlowStatus.RUNNING,
+                policies={},
+                artifact_root="/tmp/feat/.pal/artifacts",
+                created_at="now",
+                updated_at="now",
+            ).to_dict(),
+            "approval_reasons": {"verify": "Browser check completed manually."},
+        }
+    )
+
+    assert service_module._artifact_summary_lines(
+        "", preferred_sections=[], fallback="missing"
+    ) == ["missing"]
+    assert service_module._artifact_summary_lines(
+        '# Notes\n\n```json\n{"ignored": true}\n```\n\nUseful paragraph.',
+        preferred_sections=["Missing"],
+    ) == ["Useful paragraph."]
+    assert (
+        service_module._artifact_summary_lines(
+            "## Summary\n\n" + ("x" * 1700),
+            preferred_sections=["Summary"],
+        )[-1]
+        == "...truncated for PR body"
+    )
+    assert service_module._artifact_summary_lines(
+        '```json\n{"ignored": true}\n```',
+        preferred_sections=["Missing"],
+        fallback="fallback",
+    ) == ["fallback"]
+    assert service_module._first_nonempty_paragraph("## Heading\n\n") == ""
+    assert service_module._verification_status_from_markdown('{"status": "passed"}') == "passed"
+    assert (
+        service_module._verification_status_from_markdown(
+            '```json\n{"other": {"nested": true}}\n```\n\n'
+            '```json\n{"status": "blocked", "checks": [{"name": "browser"}]}\n```'
+        )
+        == "blocked"
+    )
+    assert service_module._verification_status_from_markdown("```json\n{bad}\n```") == ""
+    assert service_module._blocked_verification_lines(run, "passed", "") == []
+    assert service_module._blocked_verification_lines(
+        FlowRun.from_dict({**run.to_dict(), "approval_reasons": {}}),
+        "blocked",
+        "",
+    ) == [
+        "- Verification status is `blocked`; reviewers should inspect the validation limitation before merge.",
+    ]
+    assert service_module._blocked_verification_lines(
+        run,
+        "blocked",
+        "## Browser Verification\n\nBlocked by sandbox.",
+    ) == [
+        "- Verification status is `blocked`; reviewers should inspect the validation limitation before merge.",
+        "- Human approval reason: Browser check completed manually.",
+        "- Browser verification details are recorded in the Validation section.",
+    ]
 
 
 def test_flow_service_start_allows_cli_overrides_for_workflow(tmp_path: Path) -> None:

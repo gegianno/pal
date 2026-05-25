@@ -54,11 +54,14 @@ def test_render_complex_workflow_template_is_valid_spec(tmp_path: Path) -> None:
     assert spec.phase(FlowPhase.PR).requires_approval is True
     assert spec.phase(FlowPhase.REVIEW).policy == FlowPolicy.SUPERVISOR
     pr_agent = spec.phase(FlowPhase.PR).agents[0]
+    verify_agent = spec.phase(FlowPhase.VERIFY).agents[0]
     review_agent = spec.phase(FlowPhase.REVIEW).agents[0]
     assert pr_agent.requires == ["local_headless", "json_output"]
     assert pr_agent.tools.required == ["github_write"]
     assert pr_agent.tools.optional == ["linear_write"]
     assert "native GitHub tools" in pr_agent.prompt
+    assert "PR body must be structured" in pr_agent.prompt
+    assert "browser or local UI checks" in verify_agent.prompt
     assert review_agent.tools.optional == ["github_read", "linear_read"]
     assert spec.transition_target(FlowPhase.IMPLEMENT, "blocked") == FlowPhase.DESIGN
     assert spec.transition_target(FlowPhase.VERIFY, "complete") == FlowPhase.PR

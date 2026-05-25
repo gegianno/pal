@@ -163,6 +163,8 @@ class PhaseBrief:
             "",
             *_verification_contract_lines(self.phase),
             "",
+            *_browser_verification_lines(self.phase),
+            "",
             "## Recent Events",
             "",
             *_event_lines(self.events),
@@ -329,6 +331,19 @@ def _verification_contract_lines(phase: FlowPhase) -> list[str]:
         "- `passed`: all required checks passed.",
         "- `blocked`: verification could not fully complete; supervisor approval with a reason is required to advance.",
         "- `failed`: verification completed and found a failing check.",
+    ]
+
+
+def _browser_verification_lines(phase: FlowPhase) -> list[str]:
+    if phase != FlowPhase.VERIFY:
+        return []
+    return [
+        "## Browser Verification Guidance",
+        "",
+        "- For UI changes, attempt browser validation with provider-native browser tooling or the app's local browser test commands.",
+        "- If the provider sandbox blocks local server port binding or browser launch, record the exact command and error as verification status `blocked`.",
+        "- Do not mark browser-dependent verification as `passed` when browser validation was required but unavailable.",
+        "- To avoid this block, run the verify phase in an environment with local loopback and browser access, or have the supervisor perform the browser check outside the provider sandbox and approve with evidence.",
     ]
 
 

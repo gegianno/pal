@@ -282,7 +282,27 @@ class FlowPrManager:
             cwd=repo_path,
         )
         if existing.returncode == 0 and existing.stdout.strip():
-            return replace(repo, pr_status="existing", pr_url=existing.stdout.strip())
+            edited = self._run(
+                [
+                    "gh",
+                    "pr",
+                    "edit",
+                    repo.branch,
+                    "--title",
+                    title,
+                    "--body-file",
+                    str(body_file),
+                ],
+                cwd=repo_path,
+            )
+            if edited.returncode != 0:
+                return replace(
+                    repo,
+                    pr_status="failed",
+                    pr_url=existing.stdout.strip(),
+                    error=_command_error("gh pr edit", edited.stderr),
+                )
+            return replace(repo, pr_status="updated", pr_url=existing.stdout.strip())
         command = [
             "gh",
             "pr",

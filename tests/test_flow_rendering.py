@@ -198,6 +198,9 @@ def test_build_phase_brief_renders_verification_status_contract() -> None:
     assert "`blocked`" in markdown
     assert "supervisor approval with a reason" in markdown
     assert "`failed`" in markdown
+    assert "## Browser Verification Guidance" in markdown
+    assert "local server port binding or browser launch" in markdown
+    assert "outside the provider sandbox" in markdown
 
 
 def test_build_phase_brief_uses_workflow_default_provider_without_agents() -> None:

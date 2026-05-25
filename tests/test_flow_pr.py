@@ -41,6 +41,7 @@ class FakePrRunner:
         commit_rc: int = 0,
         push_rc: int = 0,
         existing_pr: str = "",
+        edit_rc: int = 0,
         create_rc: int = 0,
     ) -> None:
         self.changed = changed
@@ -50,6 +51,7 @@ class FakePrRunner:
         self.commit_rc = commit_rc
         self.push_rc = push_rc
         self.existing_pr = existing_pr
+        self.edit_rc = edit_rc
         self.create_rc = create_rc
         self.committed = False
         self.calls: list[tuple[list[str], Path | None]] = []
@@ -85,6 +87,8 @@ class FakePrRunner:
                 returncode=0 if self.existing_pr else 1,
                 stdout=f"{self.existing_pr}\n" if self.existing_pr else "",
             )
+        if command[:3] == ["gh", "pr", "edit"]:
+            return CommandResult(returncode=self.edit_rc, stderr="edit failed\n")
         if command[:3] == ["gh", "pr", "create"]:
             return CommandResult(
                 returncode=self.create_rc,
@@ -188,7 +192,7 @@ def test_flow_pr_manager_rejects_symlinked_repo_escape(tmp_path: Path) -> None:
         _pr(feature_dir, repos=["linked"])
 
 
-def test_flow_pr_manager_commits_pushes_and_reuses_existing_pr(tmp_path: Path) -> None:
+def test_flow_pr_manager_commits_pushes_and_updates_existing_pr(tmp_path: Path) -> None:
     feature_dir = tmp_path / "_wt" / "feat"
     _init_repo(feature_dir / "api")
     runner = FakePrRunner(existing_pr="https://example.test/pr/old")
@@ -206,10 +210,21 @@ def test_flow_pr_manager_commits_pushes_and_reuses_existing_pr(tmp_path: Path) -
     assert [repo.repo for repo in summary.repos] == ["api"]
     assert summary.repos[0].commit_status == "committed"
     assert summary.repos[0].push_status == "pushed"
-    assert summary.repos[0].pr_status == "existing"
+    assert summary.repos[0].pr_status == "updated"
     assert summary.repos[0].pr_url == "https://example.test/pr/old"
     view_call = [call[0] for call in runner.calls if call[0][:3] == ["gh", "pr", "view"]][0]
     assert view_call == ["gh", "pr", "view", "feat/test", "--json", "url", "--jq", ".url"]
+    edit_call = [call[0] for call in runner.calls if call[0][:3] == ["gh", "pr", "edit"]][0]
+    assert edit_call == [
+        "gh",
+        "pr",
+        "edit",
+        "feat/test",
+        "--title",
+        "Open PR",
+        "--body-file",
+        str(feature_dir / "body.md"),
+    ]
     assert not any(call[0][:3] == ["gh", "pr", "create"] for call in runner.calls)
 
 
@@ -240,6 +255,12 @@ def test_flow_pr_manager_creates_draft_pr(tmp_path: Path) -> None:
         (FakePrRunner(commit_rc=1), {"commit": True}, "commit_status", "git commit failed"),
         (FakePrRunner(push_rc=1), {"push": True}, "push_status", "git push failed"),
         (FakePrRunner(create_rc=1), {"create_pr": True}, "pr_status", "gh pr create failed"),
+        (
+            FakePrRunner(existing_pr="https://example.test/pr/old", edit_rc=1),
+            {"create_pr": True},
+            "pr_status",
+            "gh pr edit failed",
+        ),
     ],
 )
 def test_flow_pr_manager_records_action_failures(

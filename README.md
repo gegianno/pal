@@ -254,6 +254,11 @@ Verification artifacts must declare a standard JSON `status`: `passed`, `blocked
 `pal flow approve --phase verify --reason "..."` before advance; the approval reason is stored in
 run state and events. `failed` means verification found a real failing check and cannot be approved
 forward; replan or block the phase instead.
+Browser and local UI checks are environment-sensitive. If a nested Codex or Claude execution cannot
+bind a local dev-server port or launch a browser because of its sandbox, the verify artifact should
+use `blocked`, not `passed`; then a supervisor can run the browser check in a less restricted local
+terminal or remote runner and approve with the evidence. To avoid the block entirely, run the verify
+provider in an environment that allows local loopback and browser access.
 
 Built-in development workflows use `implement -> verify -> pr -> review` for routine work and
 `explore -> design -> implement -> verify -> pr -> review` for complex work. The `pr` phase is
@@ -271,9 +276,10 @@ expectations, not pal-executed actions. Keep `requires` for execution capabiliti
 `pal flow pr <feature>` is the lower-level deterministic PR helper that agents may use from the
 `pr` phase. By default it is a safe dry run that records repo status, branch, diff stats, and the
 action plan under `.pal/runs/<run-id>/pr/`. When explicitly requested, it can commit
-(`--commit --message ...`), push (`--push`), and create or reuse GitHub PRs through the local `gh`
-CLI (`--create-pr --no-dry-run`). Failures are recorded in the durable PR manifest instead of being
-hidden in terminal output.
+(`--commit --message ...`), push (`--push`), and create or update GitHub PRs through the local `gh`
+CLI (`--create-pr --no-dry-run`). The default PR body is structured from the run request and phase
+artifacts, including changes, validation evidence, review state, risks, and flow metadata. Failures
+are recorded in the durable PR manifest instead of being hidden in terminal output.
 
 `pal flow run <feature>` is the policy-aware phase loop:
 
