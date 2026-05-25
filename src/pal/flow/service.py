@@ -1226,7 +1226,7 @@ class LocalFlowService:
                 "",
                 "## Validation",
                 "",
-                f"- Verification status: `{verification_status or 'not recorded'}`",
+                _verification_status_line(verification_status, readiness),
                 *_artifact_summary_lines(
                     verification,
                     preferred_sections=[
@@ -1276,7 +1276,12 @@ class LocalFlowService:
                     ),
                 ]
             )
-        blocked_notes = _blocked_verification_lines(run, verification_status, verification)
+        blocked_notes = _blocked_verification_lines(
+            run,
+            verification_status,
+            verification,
+            readiness,
+        )
         if blocked_notes:
             lines.extend(["", "## Risks And Follow-Ups", "", *blocked_notes])
         lines.extend(
@@ -1528,11 +1533,27 @@ def _readiness_detail_lines(readiness: FlowReadiness) -> list[str]:
         f"- Required evidence: `{requirement.phase.value}/{requirement.check}` - {requirement.reason}"
         for requirement in readiness.requirements
     )
-    lines.extend(
-        f"- Evidence: `{record.phase.value}/{record.check}` `{record.status.value}` - {record.summary}"
-        for record in readiness.evidence
-    )
+    lines.extend(_evidence_detail_line(record) for record in readiness.evidence)
     return lines or ["- No unresolved blockers."]
+
+
+def _evidence_detail_line(record: FlowEvidence) -> str:
+    line = f"- Evidence: `{record.phase.value}/{record.check}` `{record.status.value}` - {record.summary}"
+    if record.artifacts:
+        line += f" Artifacts: {', '.join(f'`{artifact}`' for artifact in record.artifacts)}."
+    if record.url:
+        line += f" URL: {record.url}"
+    return line
+
+
+def _verification_status_line(
+    verification_status: str,
+    readiness: FlowReadiness,
+) -> str:
+    status = verification_status or "not recorded"
+    if verification_status == VerificationStatus.BLOCKED.value and readiness.ready:
+        return "- Verification status: `blocked` (resolved by recorded evidence)"
+    return f"- Verification status: `{status}`"
 
 
 def _read_artifact(run: FlowRun, name: str) -> str:
@@ -1642,8 +1663,11 @@ def _blocked_verification_lines(
     run: FlowRun,
     verification_status: str,
     verification: str,
+    readiness: FlowReadiness,
 ) -> list[str]:
     if verification_status != VerificationStatus.BLOCKED.value:
+        return []
+    if readiness.ready:
         return []
     reason = run.approval_reasons.get(FlowPhase.VERIFY.value, "").strip()
     lines = [

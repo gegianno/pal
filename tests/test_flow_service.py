@@ -764,6 +764,65 @@ def test_flow_service_pr_uses_default_body_and_reports_failures(tmp_path: Path) 
     assert service.events("feat")[-1].type == "flow.pr.failed"
 
 
+def test_flow_service_pr_marks_blocked_verification_resolved_by_evidence(
+    tmp_path: Path,
+) -> None:
+    pr_manager = RecordingPrManager()
+    store = LocalFlowStore(tmp_path / "_wt")
+    _write_workflow(tmp_path, "verify-flow", _verify_workflow())
+    service = LocalFlowService(
+        store=store,
+        providers={"fake": FakeFlowProvider()},
+        workflow_library=LocalWorkflowLibrary(tmp_path),
+        pr_manager=pr_manager,
+    )
+    run = service.start(
+        feature="feat",
+        repos=[],
+        workflow="verify-flow",
+        request="Fix the select styling regression.",
+    )
+    completed = replace(run, status=FlowStatus.COMPLETED)
+    store.save_state(completed)
+    artifact_root = Path(run.artifact_root)
+    artifact_root.mkdir(parents=True)
+    (artifact_root / "implementation.md").write_text(
+        "## Summary\n\n- Restored select styling.\n",
+        encoding="utf-8",
+    )
+    (artifact_root / "verification.md").write_text(
+        "# Verification\n\n"
+        "```json\n"
+        '{"status": "blocked", "required_evidence": ["browser"]}\n'
+        "```\n\n"
+        "## Browser Verification\n\n"
+        "- Browser launch was blocked by sandbox limits.\n",
+        encoding="utf-8",
+    )
+    (artifact_root / "browser.jpg").write_text("image\n", encoding="utf-8")
+    service.add_evidence(
+        "feat",
+        check="browser",
+        status="passed",
+        summary="Browser validation passed outside the sandbox.",
+        artifacts=["artifacts/browser.jpg"],
+    )
+
+    summary = service.pr("feat", repos=["api"], dry_run=True)
+
+    body = (store.pr_dir("feat", run.run_id) / "body.md").read_text(encoding="utf-8")
+    assert summary.readiness["status"] == "ready"
+    assert "Status: `ready`" in body
+    assert (
+        "Evidence: `verify/browser` `passed` - Browser validation passed outside the sandbox. "
+        "Artifacts: `artifacts/browser.jpg`." in body
+    )
+    assert "Verification status: `blocked` (resolved by recorded evidence)" in body
+    assert "Browser launch was blocked" in body
+    assert "## Risks And Follow-Ups" not in body
+    assert "Verification status is `blocked`" not in body
+
+
 def test_flow_service_pr_defaults_to_draft_when_not_ready(tmp_path: Path) -> None:
     pr_manager = RecordingPrManager()
     service = LocalFlowService(
@@ -853,18 +912,57 @@ def test_pr_body_helpers_handle_missing_fallbacks_and_status_variants() -> None:
         == "blocked"
     )
     assert service_module._verification_status_from_markdown("```json\n{bad}\n```") == ""
-    assert service_module._blocked_verification_lines(run, "passed", "") == []
+    ready = service_module.FlowReadiness(run_id=run.run_id, status="ready")
+    not_ready = service_module.FlowReadiness(
+        run_id=run.run_id,
+        status="not_ready",
+        blockers=["Missing evidence."],
+    )
+    assert service_module._verification_status_line("passed", ready) == (
+        "- Verification status: `passed`"
+    )
+    assert service_module._verification_status_line("blocked", ready) == (
+        "- Verification status: `blocked` (resolved by recorded evidence)"
+    )
+    assert service_module._verification_status_line("", ready) == (
+        "- Verification status: `not recorded`"
+    )
+    evidence = service_module.FlowEvidence(
+        evidence_id="evidence_1",
+        run_id=run.run_id,
+        phase=FlowPhase.VERIFY,
+        check="browser",
+        status=service_module.EvidenceStatus.PASSED,
+        summary="Browser passed.",
+        details="",
+        url="https://example.test/evidence",
+        artifacts=["artifacts/browser.jpg"],
+        actor="human",
+        created_at="2026-04-27T00:00:00Z",
+    )
+    assert service_module._evidence_detail_line(evidence) == (
+        "- Evidence: `verify/browser` `passed` - Browser passed. "
+        "Artifacts: `artifacts/browser.jpg`. URL: https://example.test/evidence"
+    )
+    evidence_url_only = replace(evidence, artifacts=[])
+    assert service_module._evidence_detail_line(evidence_url_only) == (
+        "- Evidence: `verify/browser` `passed` - Browser passed. URL: https://example.test/evidence"
+    )
+    assert service_module._blocked_verification_lines(run, "passed", "", not_ready) == []
     assert service_module._blocked_verification_lines(
         FlowRun.from_dict({**run.to_dict(), "approval_reasons": {}}),
         "blocked",
         "",
+        not_ready,
     ) == [
         "- Verification status is `blocked`; reviewers should inspect the validation limitation before merge.",
     ]
+    assert service_module._blocked_verification_lines(run, "blocked", "", ready) == []
     assert service_module._blocked_verification_lines(
         run,
         "blocked",
         "## Browser Verification\n\nBlocked by sandbox.",
+        not_ready,
     ) == [
         "- Verification status is `blocked`; reviewers should inspect the validation limitation before merge.",
         "- Human approval reason: Browser check completed manually.",
